@@ -36,6 +36,19 @@ fn get_dev(number: u64) -> String {
 }
 
 #[test]
+fn async_test() {
+    test_ini();
+
+    Reactor::block_on(async {
+        let never = async_std::future::pending::<()>();
+        let dur = std::time::Duration::from_secs(2);
+        async_std::future::timeout(dur, never)
+            .await
+            .expect_err("timeout after dur 2");
+    });
+}
+
+#[test]
 fn rebuild_test() {
     test_ini();
 
@@ -180,14 +193,20 @@ async fn nexus_add_child(new_child: u64, wait: bool) {
     let nexus = nexus_lookup(NEXUS_NAME).unwrap();
 
     nexus.add_child(&get_dev(new_child)).await.unwrap();
-    let _ = nexus.start_rebuild(&get_dev(new_child)).await.unwrap();
+    let chan = nexus.start_rebuild(&get_dev(new_child)).await.unwrap();
 
     if wait {
-        common::wait_for_rebuild(
-            get_dev(new_child),
-            RebuildState::Completed,
-            std::time::Duration::from_secs(10),
-        );
+        let dur = std::time::Duration::from_secs(10);
+        async_std::future::timeout(dur, chan)
+            .await
+            .expect("should not time out")
+            .ok();
+
+        // common::wait_for_rebuild(
+        //     get_dev(new_child),
+        //     RebuildState::Completed,
+        //     std::time::Duration::from_secs(10),
+        // );
 
         nexus_test_child(new_child).await;
     } else {
