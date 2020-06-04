@@ -1,5 +1,6 @@
 { stdenv
 , e2fsprogs
+, iptables
 , libaio
 , libiscsi
 , libspdk
@@ -37,7 +38,8 @@ with pkgs; rec {
         pkgs.lib.any
           (allowedPrefix:
             pkgs.lib.hasPrefix (toString (src + "/${allowedPrefix}")) path)
-          allowedPrefixes) src;
+          allowedPrefixes)
+      src;
 
   mayastor = rustPlatform.buildRustPackage rec {
     name = "mayastor";
@@ -71,6 +73,7 @@ with pkgs; rec {
     buildInputs = [
       clang
       e2fsprogs
+      iptables
       libaio
       libiscsi.lib
       libspdk

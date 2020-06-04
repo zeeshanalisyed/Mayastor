@@ -2,6 +2,7 @@
 
 pub mod common;
 use common::ms_exec::MayastorProcess;
+use iptables::IPTables;
 use mayastor::{
     bdev::{nexus_create, nexus_lookup},
     core::{
@@ -16,6 +17,8 @@ use mayastor::{
     subsys::Config,
 };
 use std::{thread, time};
+
+extern crate iptables;
 
 static DISKNAME1: &str = "/tmp/disk1.img";
 static BDEVNAME1: &str = "aio:///tmp/disk1.img?blk_size=512";
@@ -71,13 +74,43 @@ fn start_mayastor(cfg: &str, port: u16) -> MayastorProcess {
     MayastorProcess::new(Box::from(args)).unwrap()
 }
 
+struct StopContFirewall {
+    ipt: IPTables,
+}
+
+impl StopContFirewall {
+    fn block(&mut self) {
+        self.ipt
+            .append("filter", "INPUT", StopContFirewall::rule())
+            .unwrap();
+    }
+    fn allow(&mut self) {
+        self.ipt
+            .delete("filter", "INPUT", StopContFirewall::rule())
+            .unwrap();
+    }
+    fn rule() -> &'static str {
+        "-i lo -p tcp --dport 8430 -j DROP"
+    }
+}
+
+impl Drop for StopContFirewall {
+    fn drop(&mut self) {
+        self.allow();
+    }
+}
+
 #[test]
 fn replica_stop_cont() {
     generate_config();
 
     common::truncate_file(DISKNAME1, DISKSIZE_KB);
 
-    let mut ms = start_mayastor(CFGNAME1, 10126);
+    let mut fw = StopContFirewall {
+        ipt: iptables::new(false).expect("Should have iptables"),
+    };
+
+    let _ms = start_mayastor(CFGNAME1, 10126);
 
     test_init!();
 
@@ -85,18 +118,19 @@ fn replica_stop_cont() {
         create_nexus(true).await;
         write_some().await;
         read_some().await.unwrap();
-        ms.sig_stop();
+        // Simulate target offline
+        fw.block();
+
         let handle = thread::spawn(move || {
             // Sufficiently long to cause a controller reset
             // see NvmeBdevOpts::Defaults::timeout_us
             thread::sleep(time::Duration::from_secs(3));
-            ms.sig_cont();
-            ms
+            fw.allow();
         });
         read_some()
             .await
             .expect_err("should fail read after controller reset");
-        ms = handle.join().unwrap();
+        handle.join().unwrap();
         read_some()
             .await
             .expect("should read again after Nexus child continued");

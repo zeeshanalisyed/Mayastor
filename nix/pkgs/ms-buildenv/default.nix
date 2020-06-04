@@ -39,6 +39,7 @@
 , gnused
 , gnutar
 , gzip
+, iptables
 , less
 , libaio
 , libiscsi
@@ -87,6 +88,7 @@ let
     gnused
     gnutar
     gzip
+    iptables
     less
     libc
     nix
