@@ -4,11 +4,13 @@ use tonic::{Request, Response, Status};
 use tracing::instrument;
 
 use rpc::mayastor::*;
+use std::convert::From;
 
 use crate::{
     bdev::{
         nexus::{instances, nexus_bdev},
         nexus_create,
+        VerboseError,
     },
     core::Cores,
     grpc::{
@@ -22,6 +24,7 @@ use crate::{
     },
     pool,
     replica,
+    subsys,
 };
 
 #[derive(Debug)]
@@ -29,6 +32,40 @@ struct UnixStream(tokio::net::UnixStream);
 
 #[derive(Debug)]
 pub struct MayastorSvc {}
+
+// pub fn export_config<T>(response: GrpcResult<T>) -> GrpcResult<T> {
+//     if response.is_ok() {
+//         if let Err(e) = subsys::Config::export() {
+//             error!("Failed to export config: {}", e.verbose());
+//             return Err(Status::data_loss("Failed to export config"));
+//         }
+//     }
+//     response
+// }
+
+pub fn export_config<T>(result: T) -> GrpcResult<T> {
+    match subsys::Config::export() {
+        Err(e) => {
+            error!("Failed to export config: {}", e.verbose());
+            Err(Status::data_loss("Failed to export config"))
+        }
+        Ok(_) => {
+            Ok(Response::new(result))
+        }
+    }
+}
+
+pub type GrpcResultAtomic<T> = std::result::Result<Response<T>, Status>;
+
+pub struct GrpcAtomicResult<T> {
+    pub result: GrpcResult<T>
+}
+
+impl<T> From<GrpcAtomicResult<T>> for GrpcResult<T> {
+    fn from(result: GrpcAtomicResult<T>) -> Self {
+        Err(Status::data_loss("Failed to export config"))
+    }
+}
 
 #[tonic::async_trait]
 impl mayastor_server::Mayastor for MayastorSvc {
@@ -55,10 +92,11 @@ impl mayastor_server::Mayastor for MayastorSvc {
         let pool = locally! { pool::create_pool(args) };
 
         info!("Created or imported pool {}", name);
+        //export_config(pool)
         Ok(Response::new(pool))
     }
 
-    #[instrument(level = "debug", err)]
+    //#[instrument(level = "debug", err)]
     async fn destroy_pool(
         &self,
         request: Request<DestroyPoolRequest>,
@@ -69,7 +107,7 @@ impl mayastor_server::Mayastor for MayastorSvc {
         debug!("Destroying pool {} ...", name);
         locally! { pool::destroy_pool(args) };
         info!("Destroyed pool {}", name);
-        Ok(Response::new(Null {}))
+        export_config(Null {})
     }
 
     #[instrument(level = "debug", err)]

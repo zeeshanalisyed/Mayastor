@@ -1,0 +1,81 @@
+---
+source: config.yml
+nvmf_tcp_tgt_conf:
+  name: mayastor_target
+  max_namespaces: 110
+  opts:
+    max_queue_depth: 64
+    max_qpairs_per_ctrl: 128
+    in_capsule_data_size: 4096
+    max_io_size: 131072
+    io_unit_size: 131072
+    max_aq_depth: 128
+    num_shared_buf: 511
+    buf_cache_size: 64
+    max_srq_depth: 0
+    no_srq: false
+    ch2_success: true
+    dif_insert_or_strip: false
+    sock_priority: 0
+iscsi_tgt_conf:
+  authfile: ""
+  nodebase: iqn.2019-05.io.openebs
+  timeout: 5
+  nop_ininterval: 1
+  disable_chap: false
+  require_chap: false
+  mutual_chap: false
+  chap_group: 0
+  max_sessions: 128
+  max_connections_per_session: 2
+  max_connections: 1024
+  max_queue_depth: 128
+  default_time2wait: 2
+  default_time2retain: 20
+  first_burst_length: 8192
+  immediate_data: true
+  error_recovery_level: 0
+  allow_duplicate_isid: false
+nvme_bdev_opts:
+  action_on_timeout: 1
+  timeout_us: 2000000
+  retry_count: 5
+  arbitration_burst: 0
+  low_priority_weight: 0
+  medium_priority_weight: 0
+  high_priority_weight: 0
+  nvme_adminq_poll_period_us: 10000
+  nvme_ioq_poll_period_us: 0
+  io_queue_requests: 512
+  delay_cmd_submit: true
+bdev_opts:
+  bdev_io_pool_size: 65535
+  bdev_io_cache_size: 512
+nexus_opts:
+  nvmf_enable: true
+  nvmf_discovery_enable: true
+  nvmf_nexus_port: 4422
+  nvmf_replica_port: 8421
+  iscsi_enable: true
+  iscsi_nexus_port: 3261
+  iscsi_replica_port: 3263
+err_store_opts:
+  err_store_size: 256
+  enable_err_store: false
+  action: ignore
+  max_errors: 5
+  retention_ns: 10000000000
+base_bdevs:
+  - uri: "iscsi://127.0.0.1:3262/iqn.2019-05.io.openebs:replica1/0?uuid=02745151-3f77-4c1d-96d8-d5f0bf5047a9"
+  - uri: "nvmf://127.0.0.1:8420/nqn.2019-05.io.openebs:replica2?uuid=c1c695f2-9e29-4ab2-82e0-ffddebae40e0"
+  - uri: "aio:///tmp/disk1.img?uuid=2e20e130-bef2-41c1-a96f-78260a6efdfc"
+nexus_bdevs:
+  - name: nexus-d54df395-1fd4-48ca-b17a-615f955c5df7
+    uuid: d54df395-1fd4-48ca-b17a-615f955c5df7
+    size: "15728640"
+    children:
+      - "iscsi://127.0.0.1:3262/iqn.2019-05.io.openebs:replica1/0?uuid=02745151-3f77-4c1d-96d8-d5f0bf5047a9"
+      - "nvmf://127.0.0.1:8420/nqn.2019-05.io.openebs:replica2"
+      - "aio:///tmp/disk1.img?uuid=2e20e130-bef2-41c1-a96f-78260a6efdfc"
+pools: []
+implicit_share_base: true

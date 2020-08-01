@@ -8,6 +8,7 @@ members = [
 	"devinfo",
 	"jsonrpc",
 	"mayastor",
+	"mayastor-macros",
 	"nvmeadm",
 	"rpc",
 	"sysfs",

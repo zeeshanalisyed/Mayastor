@@ -404,6 +404,17 @@ impl Config {
             }
         });
     }
+
+    pub fn export() -> Result<(),std::io::Error> {
+        let cfg = Config::get().refresh().unwrap();
+        match cfg.source.as_ref() {
+            Some(target) => cfg.write(&target),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "no config source file provided",
+            ))
+        }
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]

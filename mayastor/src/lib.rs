@@ -37,3 +37,17 @@ pub extern "C" fn cps_init() {
     subsys::register_subsystem();
     bdev::nexus::register_module();
 }
+
+extern crate mayastor_macros;
+
+use mayastor_macros::return_as_is;
+
+#[return_as_is]
+pub fn lolz() -> Result<(),()> {
+    Ok(())
+}
+
+#[test]
+fn ttt() {
+    assert!(lolz().is_err());
+}

@@ -1222,6 +1222,7 @@ dependencies = [
  "jsonrpc",
  "libc",
  "log",
+ "mayastor-macros",
  "nix 0.16.1",
  "once_cell",
  "pin-utils",
@@ -1248,6 +1249,10 @@ dependencies = [
  "url",
  "uuid",
 ]
+
+[[package]]
+name = "mayastor-macros"
+version = "0.1.0"
 
 [[package]]
 name = "maybe-uninit"

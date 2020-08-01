@@ -66,6 +66,7 @@ tower = "0.3"
 tracing = "0.1"
 tracing-futures = "0.2.4"
 url = "2.1"
+mayastor-macros = { path = "../mayastor-macros"}
 
 [dependencies.rpc]
 path = "../rpc"
