@@ -15,6 +15,7 @@ use spdk_sys::spdk_get_thread;
 pub mod bdev_io;
 pub mod error_bdev;
 pub mod ms_exec;
+pub mod nexus_util;
 
 /// call F cnt times, and sleep for a duration between each invocation
 pub fn retry<F, T, E>(mut cnt: u32, timeout: Duration, mut f: F) -> T

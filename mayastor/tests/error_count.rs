@@ -11,6 +11,8 @@ pub use common::error_bdev::{
     SPDK_BDEV_IO_TYPE_WRITE,
     VBDEV_IO_FAILURE,
 };
+use common::nexus_util;
+
 use mayastor::{
     bdev::{nexus_create, nexus_lookup, ActionType, NexusErrStore, QueryType},
     core::{
@@ -25,7 +27,7 @@ use mayastor::{
 
 pub mod common;
 
-static ERROR_COUNT_TEST_NEXUS: &str = "error_count_test_nexus";
+static NXNAME: &str = "error_count_test_nexus";
 
 static DISKNAME1: &str = "/tmp/disk1.img";
 static BDEVNAME1: &str = "aio:///tmp/disk1.img?blk_size=512";
@@ -36,7 +38,7 @@ static ERROR_DEVICE: &str = "error_device";
 static EE_ERROR_DEVICE: &str = "EE_error_device"; // The prefix is added by the vbdev_error module
 static BDEV_EE_ERROR_DEVICE: &str = "bdev:///EE_error_device";
 
-static YAML_CONFIG_FILE: &str = "/tmp/error_count_test_nexus.yaml";
+static CONFIG_FILE_NEXUS: &str = "/tmp/error_count.yaml";
 
 #[test]
 fn nexus_error_count_test() {
@@ -47,8 +49,11 @@ fn nexus_error_count_test() {
     config.err_store_opts.enable_err_store = true;
     config.err_store_opts.action = ActionType::Ignore;
     config.err_store_opts.err_store_size = 256;
-    config.write(YAML_CONFIG_FILE).unwrap();
-    test_init!(YAML_CONFIG_FILE);
+    config.err_store_opts.timeout_action = ActionType::Ignore;
+    config.err_store_opts.timeout_sec = 0;
+
+    config.write(CONFIG_FILE_NEXUS).unwrap();
+    test_init!(CONFIG_FILE_NEXUS);
 
     Reactor::block_on(async {
         create_error_bdev(ERROR_DEVICE, DISKNAME2);
@@ -204,17 +209,21 @@ fn nexus_error_count_test() {
         None, // no time specified
     );
 
+    Reactor::block_on(async {
+        nexus_util::delete_nexus(NXNAME).await;
+    });
+
     mayastor_env_stop(0);
 
     common::delete_file(&[DISKNAME1.to_string()]);
     common::delete_file(&[DISKNAME2.to_string()]);
-    common::delete_file(&[YAML_CONFIG_FILE.to_string()]);
+    common::delete_file(&[CONFIG_FILE_NEXUS.to_string()]);
 }
 
 async fn create_nexus() {
     let ch = vec![BDEVNAME1.to_string(), BDEV_EE_ERROR_DEVICE.to_string()];
 
-    nexus_create(ERROR_COUNT_TEST_NEXUS, 64 * 1024 * 1024, None, &ch)
+    nexus_create(NXNAME, 64 * 1024 * 1024, None, &ch)
         .await
         .unwrap();
 }
@@ -225,7 +234,7 @@ fn nexus_err_query_and_test(
     expected_count: u32,
     age_nano: Option<u64>,
 ) {
-    let nexus = nexus_lookup(ERROR_COUNT_TEST_NEXUS).unwrap();
+    let nexus = nexus_lookup(NXNAME).unwrap();
     let count = nexus
         .error_record_query(
             child_bdev,
@@ -240,8 +249,7 @@ fn nexus_err_query_and_test(
 }
 
 async fn err_write_nexus(succeed: bool) {
-    let bdev = Bdev::lookup_by_name(ERROR_COUNT_TEST_NEXUS)
-        .expect("failed to lookup nexus");
+    let bdev = Bdev::lookup_by_name(NXNAME).expect("failed to lookup nexus");
     let d = bdev
         .open(true)
         .expect("failed open bdev")
@@ -271,8 +279,7 @@ async fn err_read_nexus_both(succeed: bool) {
 }
 
 async fn err_read_nexus() -> bool {
-    let bdev = Bdev::lookup_by_name(ERROR_COUNT_TEST_NEXUS)
-        .expect("failed to lookup nexus");
+    let bdev = Bdev::lookup_by_name(NXNAME).expect("failed to lookup nexus");
     let d = bdev
         .open(true)
         .expect("failed open bdev")

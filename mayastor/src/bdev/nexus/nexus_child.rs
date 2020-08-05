@@ -1,13 +1,24 @@
-use std::{convert::TryFrom, fmt::Display, sync::Arc};
-
 use nix::errno::Errno;
 use serde::{export::Formatter, Serialize};
 use snafu::{ResultExt, Snafu};
+use std::{convert::TryFrom, fmt::Display, sync::Arc};
 
-use spdk_sys::{spdk_bdev_module_release_bdev, spdk_io_channel};
+use std::ffi::c_void;
+
+use spdk_sys::{
+    spdk_bdev_module_release_bdev,
+    spdk_bdev_set_timeout,
+    spdk_io_channel,
+};
 
 use crate::{
-    bdev::NexusErrStore,
+    bdev::{
+        nexus::{
+            nexus_bdev::nexus_lookup,
+            nexus_io::{io_op_name, io_status},
+        },
+        NexusErrStore,
+    },
     core::{Bdev, BdevHandle, CoreError, Descriptor, DmaBuf},
     nexus_uri::{bdev_destroy, NexusBdevError},
     rebuild::{ClientOperations, RebuildJob},
@@ -40,6 +51,8 @@ pub enum ChildError {
     OpenWithoutBdev {},
     #[snafu(display("Failed to create a BdevHandle for child"))]
     HandleCreate { source: CoreError },
+    #[snafu(display("Failed to set timeout for child {}", name))]
+    SetTimeoutFail { name: String },
 }
 
 #[derive(Debug, Snafu)]
@@ -181,6 +194,43 @@ impl Display for NexusChild {
     }
 }
 
+/// This function is called if the spdk timeout is triggered
+unsafe extern "C" fn timeout_callback(
+    nexus_name_ptr: *mut nix::libc::c_void,
+    child_io: *mut spdk_sys::spdk_bdev_io,
+) {
+    let nexus_name_boxed = std::boxed::Box::<String>::from_raw(
+        nexus_name_ptr as *mut std::string::String,
+    );
+    // ensure the string is not freed because this callback can be called again
+    let nexus_name_ref = Box::leak(nexus_name_boxed);
+    let io_type = (*child_io).type_;
+
+    warn!(
+        "timed out, nexus name {} type {}",
+        nexus_name_ref,
+        io_op_name(io_type.into())
+    );
+
+    let nexus_mut_ref = match nexus_lookup(nexus_name_ref) {
+        Some(nexus) => nexus,
+        None => {
+            error!("Failed to find the nexus {}", nexus_name_ref);
+            return;
+        }
+    };
+
+    // add the error to the store.
+    // Let the error store decide whether to record it or fault the child
+    nexus_mut_ref.error_record_add(
+        (*child_io).bdev,
+        io_type.into(),
+        io_status::TIMEOUT,
+        0, //io offset unknown
+        0, //io_length unknown
+    );
+}
+
 impl NexusChild {
     /// Open the child in RW mode and claim the device to be ours. If the child
     /// is already opened by someone else (i.e one of the targets) it will
@@ -233,6 +283,24 @@ impl NexusChild {
                 Some(NexusErrStore::new(cfg.err_store_opts.err_store_size));
         };
 
+        let timeout = cfg.err_store_opts.timeout_sec;
+        if timeout > 0 {
+            let boxed_nexus_name: Box<String> = Box::new(self.parent.clone());
+            unsafe {
+                if spdk_bdev_set_timeout(
+                    self.get_descriptor().unwrap().as_ptr(), // the spdk_bdev
+                    timeout,                                 // seconds
+                    Some(timeout_callback),
+                    std::boxed::Box::<String>::into_raw(boxed_nexus_name)
+                        as *mut c_void,
+                ) != 0
+                {
+                    return Err(ChildError::SetTimeoutFail {
+                        name: self.name.clone(),
+                    });
+                }
+            }
+        };
         self.state = ChildState::Open;
 
         debug!("{}: child {} opened successfully", self.parent, self.name);

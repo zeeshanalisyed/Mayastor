@@ -497,6 +497,12 @@ pub struct ErrStoreOpts {
 
     /// errors older than this are ignored
     pub retention_ns: u64,
+
+    /// timeout for IOs
+    pub timeout_sec: u64,
+
+    /// whether to fault the child due to the total number of failed IOs
+    pub timeout_action: ActionType,
 }
 
 impl Default for ErrStoreOpts {
@@ -507,6 +513,8 @@ impl Default for ErrStoreOpts {
             action: ActionType::Fault,
             max_errors: 64,
             retention_ns: 10_000_000_000,
+            timeout_action: ActionType::Ignore,
+            timeout_sec: 0, // 0 means disabled
         }
     }
 }

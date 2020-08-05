@@ -25,6 +25,7 @@
 
 use futures::future::join_all;
 use snafu::ResultExt;
+use spdk_sys::spdk_bdev;
 
 use crate::{
     bdev::{
@@ -530,6 +531,23 @@ impl Nexus {
             Some(child) => Ok(child),
             None => Err(Error::ChildNotFound {
                 child: name.to_owned(),
+                name: self.name.clone(),
+            }),
+        }
+    }
+
+    /// Find the child which uses the given spdk_bdev.
+    pub fn get_child_by_bdev_ptr(
+        &mut self,
+        bdev: *const spdk_bdev,
+    ) -> Result<&mut NexusChild, Error> {
+        match self
+            .children
+            .iter_mut()
+            .find(|c| c.bdev.as_ref().unwrap().as_ptr() as *const _ == bdev)
+        {
+            Some(child) => Ok(child),
+            None => Err(Error::ChildWithBdevNotFound {
                 name: self.name.clone(),
             }),
         }

@@ -16,7 +16,7 @@ use crate::{
             Nexus,
         },
         nexus_child::{ChildState, NexusChild},
-        nexus_io::{io_status, io_type},
+        nexus_io::{io_status, io_status_name, io_type},
     },
     core::{Cores, Reactors},
     subsys::Config,
@@ -70,7 +70,11 @@ impl NexusErrStore {
     pub const FLUSH_FLAG: u32 = 1 << (io_type::FLUSH - 1);
     pub const RESET_FLAG: u32 = 1 << (io_type::RESET - 1);
 
-    pub const IO_FAILED_FLAG: u32 = 1;
+    pub const IO_FAILED_FLAG: u32 = 1 << 0;
+    pub const IO_TIMEOUT_FLAG: u32 = 1 << 1;
+
+    pub const IO_FAILED: i32 = io_status::FAILED;
+    pub const IO_TIMEOUT: i32 = io_status::TIMEOUT;
 
     // the following definitions are for the error_store unit test
     pub const IO_TYPE_READ: u32 = io_type::READ;
@@ -78,8 +82,6 @@ impl NexusErrStore {
     pub const IO_TYPE_UNMAP: u32 = io_type::UNMAP;
     pub const IO_TYPE_FLUSH: u32 = io_type::FLUSH;
     pub const IO_TYPE_RESET: u32 = io_type::RESET;
-
-    pub const IO_FAILED: i32 = io_status::FAILED;
 
     pub fn new(max_records: usize) -> Self {
         Self {
@@ -272,55 +274,66 @@ impl Nexus {
         let nexus = match nexus_lookup(&name) {
             Some(nexus) => nexus,
             None => {
-                error!("Failed to find the nexus >{}<", name);
+                error!("Failed to find the nexus {}", name);
                 return;
             }
         };
         trace!("Adding error record {} bdev {:?}", io_op_type, bdev);
-        for child in nexus.children.iter_mut() {
-            if child.bdev.as_ref().unwrap().as_ptr() as *const _ == bdev {
-                if child.state == ChildState::Open {
-                    if child.err_store.is_some() {
-                        child.err_store.as_mut().unwrap().add_record(
-                            io_op_type,
-                            io_error_type,
-                            io_offset,
-                            io_num_blocks,
-                            now,
-                        );
-                        let cfg = Config::get();
-                        if cfg.err_store_opts.action == ActionType::Fault
-                            && !Self::assess_child(
-                                &child,
-                                cfg.err_store_opts.max_errors,
-                                cfg.err_store_opts.retention_ns,
-                                QueryType::Total,
-                            )
-                        {
-                            let child_name = child.name.clone();
-                            info!("Faulting child {}", child_name);
-                            if nexus.fault_child(&child_name).await.is_err() {
-                                error!(
-                                    "Failed to fault the child {}",
-                                    child_name,
-                                );
-                            }
-                        }
-                    } else {
-                        let child_name = child.name.clone();
-                        error!(
-                            "Failed to record error - no error store in child {}",
-                            child_name,
-                        );
-                    }
-                    return;
-                }
-                let child_name = child.name.clone();
-                trace!("Ignoring error response sent to non-open child {}, state {:?}", child_name, child.state);
+
+        let child = match nexus.get_child_by_bdev_ptr(bdev) {
+            Ok(ch) => ch,
+            Err(_) => {
+                error!("Failed to record error - could not find child");
+                return;
+            }
+        };
+        let child_name = child.name.clone();
+
+        if child.state != ChildState::Open {
+            trace!(
+                "Ignoring error response sent to non-open child {}, state {:?}",
+                child_name,
+                child.state
+            );
+            return;
+        }
+        if child.err_store.is_none() {
+            error!(
+                "Failed to record error - no error store in child {}",
+                child_name,
+            );
+            return;
+        }
+
+        child.err_store.as_mut().unwrap().add_record(
+            io_op_type,
+            io_error_type,
+            io_offset,
+            io_num_blocks,
+            now,
+        );
+
+        let cfg = Config::get();
+        if (cfg.err_store_opts.timeout_action == ActionType::Fault
+            && io_error_type == io_status::TIMEOUT)
+            || (cfg.err_store_opts.action == ActionType::Fault
+                && !Self::assess_child(
+                    &child,
+                    cfg.err_store_opts.max_errors,
+                    cfg.err_store_opts.retention_ns,
+                    QueryType::Total,
+                ))
+        {
+            info!(
+                "Faulting child {} due to error {}",
+                child_name,
+                io_status_name(io_error_type)
+            );
+            if nexus.fault_child(&child_name).await.is_err() {
+                error!("Failed to fault the child {}", child_name,);
                 return;
             }
         }
-        error!("Failed to record error - could not find child");
     }
 
     pub fn error_record_query(

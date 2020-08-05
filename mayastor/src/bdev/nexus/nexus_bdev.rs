@@ -140,6 +140,11 @@ pub enum Error {
     ChildGeometry { child: String, name: String },
     #[snafu(display("Child {} of nexus {} cannot be found", child, name))]
     ChildMissing { child: String, name: String },
+    #[snafu(display(
+        "Child of nexus {} cannot be found with the specified bdev",
+        name
+    ))]
+    ChildWithBdevNotFound { name: String },
     #[snafu(display("Child {} of nexus {} has no error store", child, name))]
     ChildMissingErrStore { child: String, name: String },
     #[snafu(display("Failed to open child {} of nexus {}", child, name))]
@@ -640,7 +645,6 @@ impl Nexus {
                 (*child_io).type_,
                 pio
             );
-
             pio.ctx_as_mut_ref().status = io_status::FAILED;
         }
         pio.assess(child_io, success);

@@ -65,7 +65,7 @@ pub mod io_type {
     //    pub const IO_NUM_TYPES: u32 = 14;
 }
 
-/// the status of an IO - note: values copied from spdk bdev_module.h
+/// the status of an IO - note: most values copied from spdk bdev_module.h
 pub mod io_status {
     //pub const NOMEM: i32 = -4;
     //pub const SCSI_ERROR: i32 = -3;
@@ -73,6 +73,33 @@ pub mod io_status {
     pub const FAILED: i32 = -1;
     //pub const PENDING: i32 = 0;
     pub const SUCCESS: i32 = 1;
+
+    // non-SPDK, high to avoid clash with any future SPDK value
+    pub const TIMEOUT: i32 = 32;
+}
+
+/// Get the io status type as a string
+pub fn io_status_name(status: i32) -> &'static str {
+    match status {
+        io_status::FAILED => "FAILED",
+        io_status::SUCCESS => "SUCCESS",
+        io_status::TIMEOUT => "TIMEOUT",
+        _ => "unknown",
+    }
+}
+
+/// Get the io operation as a string
+pub fn io_op_name(op: u32) -> &'static str {
+    match op {
+        io_type::READ => "READ",
+        io_type::WRITE => "WRITE",
+        io_type::UNMAP => "UNMAP",
+        io_type::FLUSH => "FLUSH",
+        io_type::RESET => "RESET",
+        io_type::NVME_ADMIN => "NVME_ADMIN",
+        io_type::WRITE_ZEROES => "WRITE_ZEROES",
+        _ => "unknown",
+    }
 }
 
 /// NVMe Admin opcode, from nvme_spec.h
