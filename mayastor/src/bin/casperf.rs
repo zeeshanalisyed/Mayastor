@@ -22,8 +22,8 @@ use mayastor::{
 };
 use spdk_sys::{
     spdk_bdev_free_io,
-    spdk_bdev_read,
-    spdk_bdev_write,
+    spdk_bdev_read_blocks,
+    spdk_bdev_write_blocks,
     spdk_poller,
     spdk_poller_unregister,
 };
@@ -59,7 +59,7 @@ struct Job {
     blk_size: u32,
     /// num_blocks the device has
     num_blocks: u64,
-    /// aligned set of IOs we can do
+    /// aligned set of IOs in block_size
     io_blocks: u64,
     /// io queue
     queue: Vec<Io>,
@@ -74,6 +74,8 @@ struct Job {
     drain: bool,
     /// number of seconds we are running
     period: u64,
+    /// size in ios
+    size_in_ios: u64,
 }
 thread_local! {
     #[allow(clippy::vec_box)]
@@ -120,7 +122,8 @@ impl Job {
             return;
         }
 
-        let offset = (job.rng.gen::<u64>() % job.io_size) * job.io_blocks;
+        let offset_in_ios = job.rng.gen::<u64>() % job.size_in_ios;
+        let offset = offset_in_ios;
         ioq.next(offset);
     }
 
@@ -139,17 +142,23 @@ impl Job {
 
         let blk_size = bdev.block_len();
         let num_blocks = bdev.num_blocks();
+        let data_blk_size = bdev.data_block_size();
 
-        let io_size = size / blk_size as u64;
-        let io_blocks = num_blocks / io_size;
+        let io_size = size;
+        let io_blocks = io_size / u64::from(data_blk_size);
 
         let mut queue = Vec::new();
 
-        (0 ..= qd).for_each(|offset| {
+        if (io_size % u64::from(data_blk_size)) != 0 {
+            eprintln!("Invalid block sizes...{} vs {}", data_blk_size, io_size);
+            std::process::exit(1);
+        }
+
+        (0 ..= qd).for_each(|_| {
             queue.push(Io {
                 buf: DmaBuf::new(size, bdev.alignment()).unwrap(),
                 iot: IoType::READ,
-                offset,
+                offset: 0,
                 job: NonNull::dangling(),
             });
         });
@@ -169,6 +178,7 @@ impl Job {
             rng: Default::default(),
             drain: false,
             period: 0,
+            size_in_ios: num_blocks / io_blocks,
         })
     }
 
@@ -218,21 +228,23 @@ impl Io {
     /// dispatch the read IO at given offset
     fn read(&mut self, offset: u64) {
         unsafe {
-            if spdk_bdev_read(
+            let rc = spdk_bdev_read_blocks(
                 self.job.as_ref().desc.as_ptr(),
                 self.job.as_ref().ch.as_ref().unwrap().as_ptr(),
                 *self.buf,
                 offset,
-                self.buf.len(),
+                self.job.as_ref().io_blocks,
                 Some(Job::io_completion),
                 self as *const _ as *mut _,
-            ) == 0
-            {
+            );
+            if rc == 0 {
                 self.job.as_mut().n_inflight += 1;
             } else {
                 eprintln!(
-                    "failed to submit read IO to {}",
-                    self.job.as_ref().bdev.name()
+                    "failed to submit read IO to {} {} {}",
+                    self.job.as_ref().bdev.name(),
+                    offset,
+                    rc
                 );
             }
         };
@@ -241,7 +253,7 @@ impl Io {
     /// dispatch write IO at given offset
     fn write(&mut self, offset: u64) {
         unsafe {
-            if spdk_bdev_write(
+            if spdk_bdev_write_blocks(
                 self.job.as_ref().desc.as_ptr(),
                 self.job.as_ref().ch.as_ref().unwrap().as_ptr(),
                 *self.buf,

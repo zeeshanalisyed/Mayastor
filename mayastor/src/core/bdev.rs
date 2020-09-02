@@ -17,6 +17,7 @@ use spdk_sys::{
     spdk_bdev_get_block_size,
     spdk_bdev_get_buf_align,
     spdk_bdev_get_by_name,
+    spdk_bdev_get_data_block_size,
     spdk_bdev_get_device_stat,
     spdk_bdev_get_name,
     spdk_bdev_get_num_blocks,
@@ -381,6 +382,12 @@ impl Bdev {
         }
         unsafe { spdk_uuid_generate(&mut (*self.0.as_ptr()).uuid) };
         info!("No or invalid v4 UUID specified, using self generated one");
+    }
+
+    /// mostly the same as the block_len but takes into account the metadata
+    /// size this can be advertised by NVMe devices
+    pub fn data_block_size(&self) -> u32 {
+        unsafe { spdk_bdev_get_data_block_size(self.0.as_ptr()) }
     }
 
     extern "C" fn stat_cb(
