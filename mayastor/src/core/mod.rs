@@ -17,7 +17,7 @@ pub use env::{
     GLOBAL_RC,
 };
 pub use handle::BdevHandle;
-pub use reactor::{Reactor, ReactorState, Reactors, REACTOR_LIST};
+pub use reactor::{Reactor, ReactorState, Reactors};
 pub use share::{Protocol, Share};
 pub use thread::Mthread;
 

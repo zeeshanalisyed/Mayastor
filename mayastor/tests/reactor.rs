@@ -18,7 +18,7 @@ pub mod common;
 fn reactor_start_stop() {
     common::mayastor_test_init();
     let mut args = MayastorCliArgs::default();
-    args.reactor_mask = "0xF".to_string();
+    args.reactor_mask = "0x3".to_string();
     let ms = MayastorEnvironment::new(args);
 
     static mut WAIT_FOR: Lazy<AtomicUsize> =

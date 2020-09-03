@@ -40,7 +40,7 @@ enum IoType {
 /// default queue depth
 const QD: u64 = 64;
 /// default io_size
-const IO_SIZE: u64 = 512;
+const IO_SIZE: u64 = 4096;
 
 /// a Job refers to a set of work typically defined by either time or size
 /// that drives IO to a bdev using its own channel.
@@ -377,7 +377,7 @@ fn main() {
     let qd = value_t!(matches.value_of("queue_depth"), u64).unwrap_or(QD);
     let mut args = MayastorCliArgs::default();
 
-    args.reactor_mask = "0x2".to_string();
+    args.reactor_mask = "0x3".to_string();
     //args.grpc_endpoint = Some("0.0.0.0".to_string());
 
     let ms = MayastorEnvironment::new(args);
@@ -393,7 +393,7 @@ fn main() {
             for j in jobs {
                 let job = j.await;
                 let thread =
-                    Mthread::new(job.bdev.name(), Cores::current()).unwrap();
+                    Mthread::new(job.bdev.name(), Cores::last().id()).unwrap();
                 thread.msg(job, |job| {
                     job.run();
                 });

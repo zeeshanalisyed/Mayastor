@@ -31,7 +31,6 @@
 //! SPDK messages, these futures -- are allocated before they execute.
 use std::{
     cell::RefCell,
-    collections::VecDeque,
     fmt,
     fmt::Display,
     os::raw::c_void,
@@ -55,10 +54,12 @@ use spdk_sys::{
     spdk_env_thread_wait_all,
     spdk_thread,
     spdk_thread_get_cpumask,
+    spdk_thread_get_last_tsc,
     spdk_thread_lib_init_ext,
+    spdk_thread_poll,
 };
 
-use crate::core::{Cores, Mthread};
+use crate::core::{reactor::ReactorState::Incoming, Cores, Mthread};
 use std::cell::Cell;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -67,6 +68,7 @@ pub enum ReactorState {
     Running,
     Shutdown,
     Delayed,
+    Incoming,
 }
 
 impl Display for ReactorState {
@@ -76,6 +78,7 @@ impl Display for ReactorState {
             ReactorState::Running => "Running",
             ReactorState::Shutdown => "Shutdown",
             ReactorState::Delayed => "Delayed",
+            ReactorState::Incoming => "Incoming",
         };
         write!(f, "{}", s)
     }
@@ -89,22 +92,23 @@ unsafe impl Send for Reactors {}
 
 unsafe impl Sync for Reactor {}
 unsafe impl Send for Reactor {}
-pub static REACTOR_LIST: OnceCell<Reactors> = OnceCell::new();
+static REACTOR_LIST: OnceCell<Reactors> = OnceCell::new();
 
 // TODO: we only have one "type" of core however, only the master core deals
 // with futures we can TODO: should consider creating two variants of the
 // Reactor: master and remote
 #[derive(Debug)]
+#[repr(align(64))]
 pub struct Reactor {
     /// Vector of threads allocated by the various subsystems. The threads are
     /// protected by a RefCell to avoid, at runtime, mutating the vector.
     /// This, ideally, we don't want to do but considering the unsafety we
     /// keep it for now
-    threads: RefCell<VecDeque<Mthread>>,
+    threads: RefCell<Vec<Mthread>>,
     /// incoming threads that have been scheduled to this core but are not
     /// polled yet
-    incoming: crossbeam::queue::SegQueue<Mthread>,
     /// the logical core this reactor is created on
+    incomming: RefCell<Vec<Mthread>>,
     lcore: u32,
     /// represents the state of the reactor
     flags: Cell<ReactorState>,
@@ -170,6 +174,7 @@ impl Reactors {
     /// on load etc, right now we schedule to the current core.
     fn schedule(thread: *mut spdk_sys::spdk_thread) -> i32 {
         let mask = unsafe { spdk_thread_get_cpumask(thread) };
+
         let scheduled = Reactors::iter().any(|r| {
             if unsafe { spdk_cpuset_get_cpu(mask, r.lcore) } {
                 let mt = Mthread(thread);
@@ -179,7 +184,9 @@ impl Reactors {
                     thread,
                     r.lcore
                 );
-                r.incoming.push(Mthread(thread));
+
+                r.incomming.borrow_mut().push(Mthread(thread));
+                r.set_state(ReactorState::Incoming);
                 return true;
             }
             false
@@ -266,8 +273,8 @@ impl Reactor {
             unbounded::<Pin<Box<dyn Future<Output = ()> + 'static>>>();
 
         Self {
-            threads: RefCell::new(VecDeque::new()),
-            incoming: crossbeam::queue::SegQueue::new(),
+            threads: RefCell::new(Vec::new()),
+            incomming: RefCell::new(Vec::new()),
             lcore: core,
             flags: Cell::new(ReactorState::Init),
             sx,
@@ -385,6 +392,7 @@ impl Reactor {
             | ReactorState::Running => {
                 self.flags.set(state);
             }
+            ReactorState::Incoming => self.flags.set(state),
         }
     }
 
@@ -419,11 +427,15 @@ impl Reactor {
 
     /// poll this reactor to complete any work that is pending
     pub fn poll_reactor(&self) {
+        let mut last = 0;
         loop {
             match self.get_state() {
                 // running is the default mode for all cores. All cores, except
                 // the master core spin within this specific loop
                 ReactorState::Running => {
+                    self.fast_poll(&mut last);
+                }
+                ReactorState::Incoming => {
                     self.poll_once();
                 }
                 ReactorState::Shutdown => {
@@ -445,6 +457,12 @@ impl Reactor {
         }
     }
 
+    pub fn fast_poll(&self, last: &mut u64) {
+        self.threads.borrow().iter().for_each(|t| {
+            unsafe { spdk_thread_poll(t.0, 0, *last) };
+            *last = unsafe { spdk_thread_get_last_tsc(t.0) };
+        });
+    }
     /// polls the reactor only once for any work regardless of its state. For
     /// now
     #[inline]
@@ -455,8 +473,16 @@ impl Reactor {
             t.poll();
         });
 
-        while let Ok(i) = self.incoming.pop() {
-            self.threads.borrow_mut().push_back(i);
+        if self.flags.get() == Incoming {
+            let mut threads = self.threads.borrow_mut();
+            while let Some(t) = self.incomming.borrow_mut().pop() {
+                threads.push(t)
+            }
+            if cfg!(debug_assertions) {
+                self.flags.set(ReactorState::Delayed)
+            } else {
+                self.flags.set(ReactorState::Running)
+            }
         }
     }
 
@@ -466,20 +492,13 @@ impl Reactor {
     /// We might want to set a flag that we need to run futures and or incoming
     /// queues
     pub fn poll_times(&self, times: u32) {
-        let threads = self.threads.borrow();
         for _ in 0 .. times {
-            threads.iter().for_each(|t| {
+            self.threads.borrow().iter().for_each(|t| {
                 t.poll();
             });
         }
-
         self.receive_futures();
         self.run_futures();
-        drop(threads);
-
-        while let Ok(i) = self.incoming.pop() {
-            self.threads.borrow_mut().push_back(i);
-        }
     }
 }
 
@@ -494,14 +513,14 @@ impl Future for &'static Reactor {
     type Output = Result<(), ()>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         match self.get_state() {
-            ReactorState::Running => {
-                self.poll_times(3);
+            ReactorState::Running | ReactorState::Incoming => {
+                self.poll_times(128);
                 cx.waker().wake_by_ref();
                 Poll::Pending
             }
             ReactorState::Shutdown => {
                 info!("Futures reactor {} shutdown requested", self.lcore);
-                while let Some(t) = self.threads.borrow_mut().pop_front() {
+                while let Some(t) = self.threads.borrow_mut().pop() {
                     t.destroy();
                 }
 
