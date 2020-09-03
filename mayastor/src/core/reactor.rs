@@ -52,6 +52,7 @@ use spdk_sys::{
     spdk_cpuset_get_cpu,
     spdk_env_thread_launch_pinned,
     spdk_env_thread_wait_all,
+    spdk_get_ticks,
     spdk_thread,
     spdk_thread_get_cpumask,
     spdk_thread_get_last_tsc,
@@ -59,8 +60,8 @@ use spdk_sys::{
     spdk_thread_poll,
 };
 
-use crate::core::{reactor::ReactorState::Incoming, Cores, Mthread};
-use std::cell::Cell;
+use crate::core::{Cores, Mthread};
+use std::cell::{Cell, UnsafeCell};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ReactorState {
@@ -104,14 +105,14 @@ pub struct Reactor {
     /// protected by a RefCell to avoid, at runtime, mutating the vector.
     /// This, ideally, we don't want to do but considering the unsafety we
     /// keep it for now
-    threads: RefCell<Vec<Mthread>>,
+    threads: UnsafeCell<Vec<Mthread>>,
     /// incoming threads that have been scheduled to this core but are not
     /// polled yet
     /// the logical core this reactor is created on
-    incomming: RefCell<Vec<Mthread>>,
     lcore: u32,
     /// represents the state of the reactor
     flags: Cell<ReactorState>,
+    tsc: Cell<u64>,
     /// sender and Receiver for sending futures across cores without going
     /// through FFI
     sx: Sender<Pin<Box<dyn Future<Output = ()> + 'static>>>,
@@ -185,8 +186,7 @@ impl Reactors {
                     r.lcore
                 );
 
-                r.incomming.borrow_mut().push(Mthread(thread));
-                r.set_state(ReactorState::Incoming);
+                unsafe { &mut *r.threads.get() }.push(mt);
                 return true;
             }
             false
@@ -273,10 +273,10 @@ impl Reactor {
             unbounded::<Pin<Box<dyn Future<Output = ()> + 'static>>>();
 
         Self {
-            threads: RefCell::new(Vec::new()),
-            incomming: RefCell::new(Vec::new()),
+            threads: UnsafeCell::new(Vec::new()),
             lcore: core,
             flags: Cell::new(ReactorState::Init),
+            tsc: Cell::new(0),
             sx,
             rx,
         }
@@ -284,7 +284,7 @@ impl Reactor {
 
     /// this function gets called by DPDK
     extern "C" fn poll(core: *mut c_void) -> i32 {
-        debug!("Start polling of reactor {}", core as u32);
+        info!("Start polling on core {}", core as u32);
         let reactor = Reactors::get_by_core(core as u32).unwrap();
         if reactor.get_state() != ReactorState::Init {
             warn!("calling poll on a reactor who is not in the INIT state");
@@ -427,13 +427,13 @@ impl Reactor {
 
     /// poll this reactor to complete any work that is pending
     pub fn poll_reactor(&self) {
-        let mut last = 0;
         loop {
             match self.get_state() {
                 // running is the default mode for all cores. All cores, except
                 // the master core spin within this specific loop
                 ReactorState::Running => {
-                    self.fast_poll(&mut last);
+                    self.tsc.set(unsafe { spdk_get_ticks() });
+                    self.fast_poll();
                 }
                 ReactorState::Incoming => {
                     self.poll_once();
@@ -457,10 +457,12 @@ impl Reactor {
         }
     }
 
-    pub fn fast_poll(&self, last: &mut u64) {
-        self.threads.borrow().iter().for_each(|t| {
-            unsafe { spdk_thread_poll(t.0, 0, *last) };
-            *last = unsafe { spdk_thread_get_last_tsc(t.0) };
+    #[inline(always)]
+    pub fn fast_poll(&self) {
+        let threads = unsafe { &mut *{ self.threads.get() } };
+        threads.iter().for_each(|t| {
+            unsafe { spdk_thread_poll(t.0, 0, self.tsc.get()) };
+            self.tsc.set(unsafe { spdk_thread_get_last_tsc(t.0) });
         });
     }
     /// polls the reactor only once for any work regardless of its state. For
@@ -469,21 +471,10 @@ impl Reactor {
     pub fn poll_once(&self) {
         self.receive_futures();
         self.run_futures();
-        self.threads.borrow().iter().for_each(|t| {
+        let threads = unsafe { &mut *{ self.threads.get() } };
+        threads.iter().for_each(|t| {
             t.poll();
         });
-
-        if self.flags.get() == Incoming {
-            let mut threads = self.threads.borrow_mut();
-            while let Some(t) = self.incomming.borrow_mut().pop() {
-                threads.push(t)
-            }
-            if cfg!(debug_assertions) {
-                self.flags.set(ReactorState::Delayed)
-            } else {
-                self.flags.set(ReactorState::Running)
-            }
-        }
     }
 
     /// poll the threads n times but only poll the futures queue once and look
@@ -492,8 +483,9 @@ impl Reactor {
     /// We might want to set a flag that we need to run futures and or incoming
     /// queues
     pub fn poll_times(&self, times: u32) {
+        let threads = unsafe { &mut *{ self.threads.get() } };
         for _ in 0 .. times {
-            self.threads.borrow().iter().for_each(|t| {
+            threads.iter().for_each(|t| {
                 t.poll();
             });
         }
@@ -520,7 +512,8 @@ impl Future for &'static Reactor {
             }
             ReactorState::Shutdown => {
                 info!("Futures reactor {} shutdown requested", self.lcore);
-                while let Some(t) = self.threads.borrow_mut().pop() {
+                let threads = unsafe { &mut *{ self.threads.get() } };
+                while let Some(t) = threads.pop() {
                     t.destroy();
                 }
 

@@ -378,6 +378,7 @@ fn main() {
     let mut args = MayastorCliArgs::default();
 
     args.reactor_mask = "0x3".to_string();
+    args.no_pci = false;
     //args.grpc_endpoint = Some("0.0.0.0".to_string());
 
     let ms = MayastorEnvironment::new(args);
