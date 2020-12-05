@@ -1776,6 +1776,7 @@ dependencies = [
  "ioctl-gen",
  "ipnetwork",
  "jsonrpc",
+ "lazy_static",
  "libc",
  "log",
  "mbus_api",
