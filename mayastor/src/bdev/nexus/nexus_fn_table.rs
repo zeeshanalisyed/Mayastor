@@ -130,13 +130,21 @@ impl NexusFnTable {
         let io_type = nio.io_type();
         match io_type {
             IoType::Read => nexus.readv(&nio, &mut ch),
-            IoType::Write => nexus.writev(&nio, &ch),
+            IoType::Write => {
+                // nearly all bdevs report writes as always supported so test
+                // this internally
+                if !nexus.read_only {
+                    nexus.writev(&nio, &ch);
+                } else {
+                    nio.fail();
+                }
+            }
             IoType::Reset => {
                 trace!("{}: Dispatching RESET", nexus.bdev.name());
                 nexus.reset(&nio, &ch)
             }
             IoType::Unmap => {
-                if nexus.io_is_supported(io_type) {
+                if !nexus.read_only && nexus.io_is_supported(io_type) {
                     nexus.unmap(&nio, &ch)
                 } else {
                     nio.fail();
@@ -150,7 +158,7 @@ impl NexusFnTable {
                 nio.ok();
             }
             IoType::WriteZeros => {
-                if nexus.io_is_supported(io_type) {
+                if !nexus.read_only && nexus.io_is_supported(io_type) {
                     nexus.write_zeroes(&nio, &ch)
                 } else {
                     nio.fail()

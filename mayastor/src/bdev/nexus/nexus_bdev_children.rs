@@ -48,6 +48,11 @@ use crate::{
     nexus_uri::{bdev_create, bdev_destroy, NexusBdevError},
 };
 
+fn is_child_read_only(name: &str) -> bool {
+    // 01234567-abcd-ef01-2345-6789abcdef01-snap-1609332167
+    name.len() > 42 && &name[36 .. 42] == "-snap-"
+}
+
 impl Nexus {
     /// register children with the nexus, only allowed during the nexus init
     /// phase
@@ -80,6 +85,10 @@ impl Nexus {
             self.name.clone(),
             Bdev::lookup_by_name(&name),
         ));
+        if is_child_read_only(&name) {
+            info!("{}: read-only due to child {}", self.name, name);
+            self.read_only = true;
+        }
 
         self.child_count += 1;
         Ok(())
