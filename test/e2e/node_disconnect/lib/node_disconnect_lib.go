@@ -164,6 +164,8 @@ func (env *DisconnectEnv) LossWhenIdleTest() {
 
 // Run fio against the cluster while a replica mayastor pod is unscheduled and then rescheduled
 func (env *DisconnectEnv) PodLossTest() {
+	Expect(len(env.otherNodes)).To(BeNumerically("==", 2)) // must run on a 3 node cluster
+
 	fmt.Printf("removing mayastor pod from node \"%s\"\n", env.nodeToIsolate)
 	SuppressMayastorPodOn(env.nodeToIsolate)
 
@@ -250,21 +252,21 @@ func (env *DisconnectEnv) ReplicaReassignTest() {
 func SetupWithRefuge(pvcName string, storageClassName string, fioPodName string, disconnectMethod string) DisconnectEnv {
 	env := DisconnectEnv{}
 
-	env.uuid = common.MkPVC(pvcName, storageClassName)
 	env.volToDelete = pvcName
 	env.storageClass = storageClassName
 	env.disconnectMethod = disconnectMethod
+	env.uuid = common.MkPVC(pvcName, storageClassName)
 
 	createFioOnRefugeNode(fioPodName, pvcName)
 
 	fmt.Printf("waiting for fio\n")
+	env.fioPodName = fioPodName
 	Eventually(func() bool {
 		return common.FioReadyPod()
 	},
 		defTimeoutSecs, // timeout
 		"1s",           // polling interval
 	).Should(Equal(true))
-	env.fioPodName = fioPodName
 
 	env.nodeToIsolate, env.otherNodes = getNodes(env.uuid)
 	return env
@@ -276,23 +278,23 @@ func SetupWithRefuge(pvcName string, storageClassName string, fioPodName string,
 func Setup(pvcName string, storageClassName string, fioPodName string) DisconnectEnv {
 	env := DisconnectEnv{}
 
-	env.uuid = common.MkPVC(pvcName, storageClassName)
 	env.volToDelete = pvcName
 	env.storageClass = storageClassName
 	env.disconnectMethod = ""
+	env.uuid = common.MkPVC(pvcName, storageClassName)
 
 	podObj := common.CreateFioPodDef(fioPodName, pvcName)
 	_, err := common.CreatePod(podObj)
 	Expect(err).ToNot(HaveOccurred())
 
 	fmt.Printf("waiting for fio\n")
+	env.fioPodName = fioPodName
 	Eventually(func() bool {
 		return common.FioReadyPod()
 	},
 		defTimeoutSecs, // timeout
 		"1s",           // polling interval
 	).Should(Equal(true))
-	env.fioPodName = fioPodName
 
 	env.nodeToIsolate, env.otherNodes = getNodes(env.uuid)
 	return env
@@ -300,14 +302,15 @@ func Setup(pvcName string, storageClassName string, fioPodName string) Disconnec
 
 // Common steps required when tearing down the test
 func (env *DisconnectEnv) Teardown() {
+	var err error
 	if env.fioPodName != "" {
 		fmt.Printf("removing fio pod\n")
-		err := common.DeletePod(env.fioPodName)
-		Expect(err).ToNot(HaveOccurred())
+		err = common.DeletePod(env.fioPodName)
 		env.fioPodName = ""
 	}
 	if env.volToDelete != "" {
 		common.RmPVC(env.volToDelete, env.storageClass)
 		env.volToDelete = ""
 	}
+	Expect(err).ToNot(HaveOccurred())
 }
