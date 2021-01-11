@@ -3,7 +3,7 @@ use once_cell::sync::OnceCell;
 
 use mayastor::{
     bdev::{device_create, device_destroy, device_lookup, device_open},
-    core::{DmaBuf, MayastorCliArgs},
+    core::{BlockDeviceHandle, DmaBuf, MayastorCliArgs},
 };
 
 use std::{
@@ -555,12 +555,12 @@ async fn nvmf_device_writev_iovs_test() {
     // Clear callback invocation flag.
     clear_callback_invocation_flag();
 
-    // Read completion callback.
-    fn read_completion_callback(success: bool, ctx: *const c_void) {
+    // Write completion callback.
+    fn write_completion_callback(success: bool, ctx: *const c_void) {
         // Make sure callback is invoked only once.
         flag_callback_invocation();
 
-        assert!(success, "readv_blocks() failed");
+        assert!(success, "writev_blocks() failed");
         // Make sure we were passed tha same pattern string as requested.
         let s = unsafe {
             let slice = slice::from_raw_parts(
@@ -632,7 +632,7 @@ async fn nvmf_device_writev_iovs_test() {
                     IOVCNT as i32,
                     OP_OFFSET / device.block_len(),
                     iosize / device.block_len(),
-                    read_completion_callback,
+                    write_completion_callback,
                     // Use a predefined string to check that we receive the
                     // same context pointer as we pass upon
                     // invocation. For this call we don't need any
@@ -682,4 +682,101 @@ async fn nvmf_device_writev_iovs_test() {
         device_destroy(&(*url)).await.unwrap();
     })
     .await;
+}
+
+#[tokio::test]
+async fn nvmf_device_admin_ctrl() {
+    let ms = get_ms();
+    let url = launch_instance().await;
+
+    ms.spawn(async move {
+        let name = device_create(&url).await.unwrap();
+        let descr = device_open(&name, false).unwrap();
+        let handle = descr.into_handle().unwrap();
+
+        handle.nvme_admin_custom(0xCF).await.expect_err(
+            "successfully executed invalid NVMe admin command (0xCF)",
+        );
+
+        device_destroy(&url).await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn nvmf_device_reset() {
+    let ms = get_ms();
+    let url = launch_instance().await;
+
+    // Clear callback invocation flag.
+    clear_callback_invocation_flag();
+
+    struct DeviceIoCtx {
+        handle: Box<dyn BlockDeviceHandle>,
+        url: String,
+    }
+
+    // Read completion callback.
+    fn reset_completion_callback(success: bool, ctx: *const c_void) {
+        // Make sure callback is invoked only once.
+        flag_callback_invocation();
+
+        assert!(success, "reset() failed");
+        // Make sure we were passed tha same pattern string as requested.
+        let s = unsafe {
+            let slice = slice::from_raw_parts(
+                ctx as *const u8,
+                MAYASTOR_CTRLR_TITLE.len(),
+            );
+            str::from_utf8(slice).unwrap()
+        };
+
+        assert_eq!(s, MAYASTOR_CTRLR_TITLE);
+    }
+
+    let op_ctx = ms
+        .spawn(async move {
+            let name = device_create(&url).await.unwrap();
+            let descr = device_open(&name, false).unwrap();
+            let handle = descr.into_handle().unwrap();
+
+            handle
+                .reset(
+                    reset_completion_callback,
+                    // Use a predefined string to check that we receive the
+                    // same context pointer as we pass upon
+                    // invocation. For this call we don't need any
+                    // specific, operation-related context.
+                    MAYASTOR_CTRLR_TITLE.as_ptr() as *const c_void,
+                )
+                .unwrap();
+
+            AtomicPtr::new(Box::into_raw(Box::new(DeviceIoCtx {
+                handle,
+                url,
+            })))
+        })
+        .await;
+
+    // Sleep for a few seconds to let reset operation complete.
+    println!("Sleeping for 2 secs to let reset operation complete");
+    tokio::time::delay_for(std::time::Duration::from_secs(3)).await;
+    println!("Awakened.");
+
+    ms.spawn(async move {
+        let io_ctx = unsafe { Box::from_raw(op_ctx.into_inner()) };
+        println!(
+            "Identifying controller using a newly recreated I/O channels."
+        );
+        io_ctx.handle.nvme_identify_ctrlr().await.unwrap();
+        println!("Controller successfully identified");
+        device_destroy(&io_ctx.url).await.unwrap();
+    })
+    .await;
+
+    println!(
+        "Sleeping for 1 sec to let all resource cleanup operations complete"
+    );
+    tokio::time::delay_for(std::time::Duration::from_secs(1)).await;
+    println!("Awakened.");
 }
