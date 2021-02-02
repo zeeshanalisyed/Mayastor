@@ -151,6 +151,15 @@ pub struct NvmfTcpTransportOpts {
     dif_insert_or_strip: bool,
     /// abort execution timeout
     abort_timeout_sec: u32,
+    /// association timeout (ms)
+    association_timeout: u32,
+    /// Only used to store JSON representation of transport-specific values
+    //transport_specific: spdk_json_val,
+    /// Transport-specific, TCP-only
+    /// C2H success optimisation
+    c2h_success: bool,
+    /// The socket priority of the connection owned by this transport
+    sock_priority: u32,
 }
 
 /// try to read an env variable or returns the default when not found
@@ -183,12 +192,15 @@ impl Default for NvmfTcpTransportOpts {
             in_capsule_data_size: 4096,
             max_io_size: 131_072,
             io_unit_size: 131_072,
+            max_aq_depth: 128,
             max_qpairs_per_ctrl: 128,
             num_shared_buf: try_from_env("NVMF_TCP_NUM_SHARED_BUF", 2048),
             buf_cache_size: try_from_env("NVMF_TCP_BUF_CACHE_SIZE", 64),
             dif_insert_or_strip: false,
-            max_aq_depth: 128,
             abort_timeout_sec: 1,
+            association_timeout: 120_000,
+            c2h_success: true,
+            sock_priority: 0,
         }
     }
 }
@@ -209,7 +221,8 @@ impl From<NvmfTcpTransportOpts> for spdk_nvmf_transport_opts {
             buf_cache_size: o.buf_cache_size,
             dif_insert_or_strip: o.dif_insert_or_strip,
             abort_timeout_sec: o.abort_timeout_sec,
-            association_timeout: 120000,
+            association_timeout: o.association_timeout,
+            // spdk_json_val
             transport_specific: std::ptr::null(),
             opts_size: std::mem::size_of::<spdk_nvmf_transport_opts>() as u64,
         }
