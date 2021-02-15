@@ -418,7 +418,17 @@ impl Nexus {
             nexus_target: None,
         });
 
-        n.bdev.set_uuid(uuid.map(String::from));
+        if let Some(s) = uuid {
+            match uuid::Uuid::parse_str(s) {
+                Ok(u) => {
+                    info!("nexus {}: setting bdev UUID: {}", name, s);
+                    n.bdev.set_uuid(u);
+                }
+                Err(error) => {
+                    warn!("nexus {}: invalid UUID: {}: {}", name, s, error);
+                }
+            }
+        }
 
         if let Some(child_bdevs) = child_bdevs {
             n.register_children(child_bdevs);
