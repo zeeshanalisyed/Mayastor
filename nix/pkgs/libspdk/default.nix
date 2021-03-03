@@ -40,7 +40,7 @@ let
     buildInputs = [
       binutils
       libaio
-      libiscsi.dev
+      libiscsi
       liburing
       libuuid
       nasm

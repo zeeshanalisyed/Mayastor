@@ -1,5 +1,4 @@
 self: super: {
-  libiscsi = super.callPackage ./pkgs/libiscsi { };
   nvmet-cli = super.callPackage ./pkgs/nvmet-cli { };
   libspdk = (super.callPackage ./pkgs/libspdk { }).release;
   libspdk-dev = (super.callPackage ./pkgs/libspdk { }).debug;

@@ -2,19 +2,12 @@
 , norust ? false
 }:
 let
-  sources = import ./nix/sources.nix;
-  pkgs = import sources.nixpkgs {
-    overlays = [
-      (_: _: { inherit sources; })
-      (import ./nix/mayastor-overlay.nix)
-    ];
-  };
+  nixpkgs = import ./default.nix;
 in
-with pkgs;
+with nixpkgs;
 let
   nospdk_moth = "You have requested environment without SPDK, you should provide it!";
   norust_moth = "You have requested environment without rust, you should provide it!";
-  channel = import ./nix/lib/rust.nix { inherit sources; };
 in
 mkShell {
 
@@ -36,7 +29,6 @@ mkShell {
     kubernetes-helm
     libaio
     libiscsi
-    libiscsi.bin
     libudev
     liburing
     llvmPackages.libclang
@@ -55,8 +47,8 @@ mkShell {
     utillinux
     xfsprogs
   ]
-  ++ (if (nospdk) then [ libspdk-dev.buildInputs ] else [ libspdk-dev ])
-  ++ pkgs.lib.optional (!norust) channel.nightly.rust;
+  ++ (if (!nospdk) then [ libspdk ] else [ libspdk-dev.buildInputs ])
+  ++ (if (!norust) then [ rust ] else [ ]);
 
   LIBCLANG_PATH = mayastor.LIBCLANG_PATH;
   PROTOC = mayastor.PROTOC;

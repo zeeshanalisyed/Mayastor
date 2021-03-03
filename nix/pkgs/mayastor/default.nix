@@ -1,9 +1,8 @@
-{ stdenv
+{ lib
 , clang
 , dockerTools
 , e2fsprogs
 , git
-, lib
 , libaio
 , libiscsi
 , libspdk
@@ -16,18 +15,13 @@
 , openssl
 , pkg-config
 , protobuf
-, sources
 , xfsprogs
 , utillinux
-, rustup
+, rustPlatform
 , docker-compose
+, stdenv
 }:
 let
-  channel = import ../../lib/rust.nix { inherit sources; };
-  rustPlatform = makeRustPlatform {
-    rustc = channel.stable.rust;
-    cargo = channel.stable.cargo;
-  };
   whitelistSource = src: allowedPrefixes:
     builtins.filterSource
       (path: type:
@@ -36,8 +30,7 @@ let
             lib.hasPrefix (toString (src + "/${allowedPrefix}")) path)
           allowedPrefixes)
       src;
-  version_drv = import ../../lib/version.nix { inherit lib stdenv git; };
-  version = builtins.readFile "${version_drv}";
+  version = (builtins.fromTOML (builtins.readFile ../../../mayastor/Cargo.toml)).package.version;
   src_list = [
     "Cargo.lock"
     "Cargo.toml"
@@ -71,21 +64,22 @@ let
     nativeBuildInputs = [
       clang
       pkg-config
+      protobuf
     ];
     buildInputs = [
       llvmPackages.libclang
-      protobuf
       libaio
-      libiscsi.lib
+      libiscsi
       libudev
       liburing
       numactl
       openssl
       utillinux
     ];
+
     verifyCargoDeps = false;
     doCheck = false;
-    meta = { platforms = stdenv.lib.platforms.linux; };
+    meta = { platforms = lib.platforms.linux; };
   };
 in
 {
