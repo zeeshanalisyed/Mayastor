@@ -33,12 +33,12 @@ use crate::{
         CoreError,
         DmaBuf,
         DmaError,
+        GenericStatusCode,
         IoCompletionCallback,
         IoCompletionCallbackArg,
         IoCompletionStatus,
         IoType,
-        OpCompletionCallback,
-        OpCompletionCallbackArg,
+        NvmeCommandStatus,
     },
     ffihelper::{cb_arg, done_cb},
 };
@@ -113,6 +113,12 @@ pub struct NvmeDeviceHandle {
     num_blocks: u64,
     block_len: u64,
 }
+/// Context for reset operation.
+struct ResetCtx {
+    cb: IoCompletionCallback,
+    cb_arg: IoCompletionCallbackArg,
+    device: Box<dyn BlockDevice>,
+}
 
 impl NvmeDeviceHandle {
     pub fn create(
@@ -142,15 +148,19 @@ impl NvmeDeviceHandle {
             name: name.to_string(),
             io_channel: ManuallyDrop::new(io_channel),
             ctrlr,
-            block_device: Box::new(NvmeBlockDevice::from_ns(
-                name,
-                Arc::clone(&ns),
-            )),
+            block_device: Self::get_nvme_device(name, &ns),
             num_blocks: ns.num_blocks(),
             block_len: ns.block_len(),
             prchk_flags,
             ns,
         })
+    }
+
+    fn get_nvme_device(
+        name: &str,
+        ns: &Arc<NvmeNamespace>,
+    ) -> Box<dyn BlockDevice> {
+        Box::new(NvmeBlockDevice::from_ns(name, Arc::clone(ns)))
     }
 
     #[inline]
@@ -404,6 +414,25 @@ fn check_channel_for_io(
     } else {
         Err(io_type_to_err(op, errno, offset_blocks, num_blocks))
     }
+}
+
+/// Handler for controller reset operation.
+/// Serves as a proxy layer between NVMe controller and block device layer
+/// (represented by device I/O handle): we need to pass block device
+/// reference to user callback for handle-based operation.
+fn reset_callback(success: bool, arg: *mut c_void) {
+    let ctx = unsafe { Box::from_raw(arg as *mut ResetCtx) };
+
+    // Translate success/failure into NVMe errors.
+    let status = if success {
+        IoCompletionStatus::Success
+    } else {
+        IoCompletionStatus::NvmeError(NvmeCommandStatus::GenericCommandStatus(
+            GenericStatusCode::InternalDeviceError,
+        ))
+    };
+
+    (ctx.cb)(&ctx.device, status, ctx.cb_arg);
 }
 
 #[async_trait(?Send)]
@@ -778,8 +807,8 @@ impl BlockDeviceHandle for NvmeDeviceHandle {
 
     fn reset(
         &self,
-        cb: OpCompletionCallback,
-        cb_arg: OpCompletionCallbackArg,
+        cb: IoCompletionCallback,
+        cb_arg: IoCompletionCallbackArg,
     ) -> Result<(), CoreError> {
         let controller = NVME_CONTROLLERS.lookup_by_name(&self.name).ok_or(
             CoreError::BdevNotFound {
@@ -788,8 +817,18 @@ impl BlockDeviceHandle for NvmeDeviceHandle {
         )?;
         let mut controller = controller.lock().expect("lock poisoned");
 
+        let ctx = Box::new(ResetCtx {
+            cb,
+            cb_arg,
+            device: Self::get_nvme_device(&self.name, &self.ns),
+        });
+
         // Schedule asynchronous controller reset.
-        controller.reset(cb, cb_arg, false)
+        controller.reset(
+            reset_callback,
+            Box::into_raw(ctx) as *mut c_void,
+            false,
+        )
     }
 
     fn unmap_blocks(
