@@ -318,8 +318,9 @@ impl Bio {
     async fn child_retire(nexus: String, child: Bdev) {
         error!("{:#?}", child);
 
-        if let Some(nexus) = nexus_lookup(&nexus) {
-            if let Some(child) = nexus.child_lookup(&child.name()) {
+        if let Some(nexus) = nexus_lookup(&nexus).await {
+            let nexus_w = nexus.write().await;
+            if let Some(child) = nexus_w.child_lookup(&child.name()) {
                 let current_state = child.state.compare_and_swap(
                     ChildState::Open,
                     ChildState::Faulted(Reason::IoError),
@@ -334,9 +335,9 @@ impl Bio {
                     );
 
                     let uri = child.name.clone();
-                    nexus.pause().await.unwrap();
-                    nexus.reconfigure(DrEvent::ChildFault).await;
-                    //nexus.remove_child(&uri).await.unwrap();
+                    nexus_w.pause().await.unwrap();
+                    nexus_w.reconfigure(DrEvent::ChildFault).await;
+                    //nexus_w.remove_child(&uri).await.unwrap();
 
                     // Note, an error can occur here if a separate task,
                     // e.g. grpc request is also deleting the child,
@@ -347,9 +348,9 @@ impl Bio {
                         error!("{} destroying bdev {}", err, uri)
                     }
 
-                    nexus.resume().await.unwrap();
-                    if nexus.status() == NexusStatus::Faulted {
-                        error!(":{} has no children left... ", nexus);
+                    nexus_w.resume().await.unwrap();
+                    if nexus_w.status() == NexusStatus::Faulted {
+                        error!(":{} has no children left... ", nexus_w);
                     }
                 }
             }

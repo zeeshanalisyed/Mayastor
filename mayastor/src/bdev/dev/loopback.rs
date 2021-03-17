@@ -82,8 +82,9 @@ impl CreateDestroy for Loopback {
     }
 
     async fn destroy(self: Box<Self>) -> Result<(), Self::Error> {
-        if let Some(child) = lookup_child_from_bdev(&self.name) {
-            child.remove();
+        if let Some(child) = lookup_child_from_bdev(&self.name).await {
+            let mut child_w = child.write().await;
+            child_w.remove();
         }
         Ok(())
     }

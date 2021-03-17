@@ -25,9 +25,9 @@ pub enum Error {
 
 /// A wrapper around an SPDK thread.
 ///
-/// The name thread is chosen poorly and should not be confused with an actual thread. Consider it
-/// more to be analogous to a container to which you can submit work and poll it to drive
-/// the submitted work to completion.
+/// The name thread is chosen poorly and should not be confused with an actual
+/// thread. Consider it more to be analogous to a container to which you can
+/// submit work and poll it to drive the submitted work to completion.
 ///
 /// # Safety
 ///

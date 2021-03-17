@@ -372,35 +372,37 @@ impl Nexus {
 
     /// try to open all the child devices
     pub(crate) async fn try_open_children(&mut self) -> Result<(), Error> {
-        if self.children.is_empty()
-            || self.children.iter().any(|c| c.bdev.is_none())
-        {
-            return Err(Error::NexusIncomplete {
-                name: self.name.clone(),
-            });
+        // Set the common block size.
+        let mut blk_size = None;
+        for child in self.children {
+            let child_r = child.read().await;
+            if child_r.bdev.is_none() {
+                return Err(Error::NexusIncomplete {
+                    name: self.name.clone(),
+                });
+            }
+            if let Some(blk_size) = blk_size {
+                if child_r.bdev.as_ref().unwrap().block_len() != blk_size {
+                    return Err(Error::MixedBlockSizes {
+                        name: self.name.clone(),
+                    });
+                }
+            } else {
+                blk_size = Some(child_r.bdev.as_ref().unwrap().block_len());
+            }
         }
-
-        let blk_size = self.children[0].bdev.as_ref().unwrap().block_len();
-
-        if self
-            .children
-            .iter()
-            .any(|b| b.bdev.as_ref().unwrap().block_len() != blk_size)
-        {
-            return Err(Error::MixedBlockSizes {
-                name: self.name.clone(),
-            });
-        }
-
-        self.bdev.set_block_len(blk_size);
+        self.bdev.set_block_len(blk_size.unwrap());
 
         let size = self.size;
 
-        let (open, error): (Vec<_>, Vec<_>) = self
-            .children
-            .iter_mut()
-            .map(|c| c.open(size))
-            .partition(Result::is_ok);
+        let (mut open, mut error) = (Vec::new(), Vec::new());
+        for child in self.children {
+            let mut child_w = child.write().await;
+            match child_w.open(size) {
+                Ok(c) => open.push(c),
+                Err(e) => error.push(e),
+            }
+        }
 
         // depending on IO consistency policies, we might be able to go online
         // even if one of the children failed to open. This is work is not

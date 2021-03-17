@@ -271,7 +271,7 @@ impl Nexus {
         io_num_blocks: u64,
         now: Instant,
     ) {
-        let nexus = match nexus_lookup(&name) {
+        let nexus = match nexus_lookup(&name).await {
             Some(nexus) => nexus,
             None => {
                 error!("Failed to find the nexus >{}<", name);
@@ -279,7 +279,8 @@ impl Nexus {
             }
         };
         trace!("Adding error record {:?} bdev {:?}", io_op_type, bdev);
-        for child in nexus.children.iter_mut() {
+        let mut nexus_w = nexus.write().await;
+        for child in nexus_w.children.iter_mut() {
             if let Some(bdev) = child.bdev.as_ref() {
                 if bdev.as_ptr() as *const _ == bdev {
                     if child.state() == ChildState::Open {
@@ -302,7 +303,7 @@ impl Nexus {
                             {
                                 let child_name = child.name.clone();
                                 info!("Faulting child {}", child_name);
-                                if nexus
+                                if nexus_w
                                     .fault_child(&child_name, Reason::IoError)
                                     .await
                                     .is_err()

@@ -113,7 +113,8 @@ pub fn target_name(bdev_name: &str) -> String {
 ///
 /// # Safety
 ///
-/// SPDK manages this and it is equivalent to Send/Sync. This means this type is Send/Sync.
+/// SPDK manages this and it is equivalent to Send/Sync. This means this type is
+/// Send/Sync.
 struct IscsiModule(spdk_bdev_module);
 impl IscsiModule {
     pub fn as_mut_ptr(&self) -> *mut spdk_bdev_module {

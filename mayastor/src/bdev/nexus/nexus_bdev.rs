@@ -9,6 +9,7 @@ use std::{
     env,
     fmt::{Display, Formatter},
     os::raw::c_void,
+    sync::Arc,
 };
 
 use futures::{channel::oneshot, future::join_all};
@@ -17,6 +18,7 @@ use rpc::mayastor::NvmeAnaState;
 use serde::Serialize;
 use snafu::{ResultExt, Snafu};
 use tonic::{Code, Status};
+use tokio::sync::RwLock;
 
 use spdk_sys::{
     spdk_bdev,
@@ -332,13 +334,13 @@ pub struct Nexus {
     /// number of children part of this nexus
     pub(crate) child_count: u32,
     /// vector of children
-    pub children: Vec<NexusChild>,
+    pub children: Vec<Arc<RwLock<NexusChild>>>,
     /// inner bdev
     pub(crate) bdev: Bdev,
     /// raw pointer to bdev (to destruct it later using Box::from_raw())
     bdev_raw: *mut spdk_bdev,
     /// represents the current state of the Nexus
-    pub(super) state: std::sync::Mutex<NexusState>,
+    pub(super) state: NexusState,
     /// the offset in num blocks where the data partition starts
     pub data_ent_offset: u64,
     /// the handle to be used when sharing the nexus, this allows for the bdev
@@ -412,7 +414,7 @@ impl Nexus {
         size: u64,
         uuid: Option<&str>,
         child_bdevs: Option<&[String]>,
-    ) -> Box<Self> {
+    ) -> Arc<RwLock<Self>> {
         let mut b = Box::new(spdk_bdev::default());
 
         b.name = c_str!(name);
@@ -425,7 +427,7 @@ impl Nexus {
 
         let cfg = Config::get();
 
-        let mut n = Box::new(Nexus {
+        let mut nexus = Nexus {
             name: name.to_string(),
             child_count: 0,
             children: Vec::new(),
@@ -437,19 +439,17 @@ impl Nexus {
             size,
             nexus_target: None,
             max_io_attempts: cfg.err_store_opts.max_io_attempts,
-        });
+        };
 
-        n.bdev.set_uuid(uuid.map(String::from));
+        nexus.bdev.set_uuid(uuid.map(String::from));
 
         if let Some(child_bdevs) = child_bdevs {
-            n.register_children(child_bdevs);
+            nexus.register_children(child_bdevs);
         }
 
-        // store a reference to the Self in the bdev structure.
-        unsafe {
-            (*n.bdev.as_ptr()).ctxt = n.as_ref() as *const _ as *mut c_void;
-        }
-        n
+        let retval = Arc::new(RwLock::new(nexus));
+
+        retval
     }
 
     /// set the state of the nexus
@@ -537,13 +537,14 @@ impl Nexus {
 
         let nexus_name = self.name.clone();
         Reactor::block_on(async move {
-            let nexus = nexus_lookup(&nexus_name).expect("Nexus not found");
-            for child in &mut nexus.children {
+            let nexus = nexus_lookup(&nexus_name).await.expect("Nexus not found");
+            let nexus_w = nexus.write().await;
+            for child in &mut nexus_w.children {
                 if child.state() == ChildState::Open {
                     if let Err(e) = child.close().await {
                         error!(
                             "{}: child {} failed to close with error {}",
-                            nexus.name,
+                            nexus_w.name,
                             child.name,
                             e.verbose()
                         );
@@ -1098,37 +1099,39 @@ pub async fn nexus_create(
 ) -> Result<(), Error> {
     // global variable defined in the nexus module
     let nexus_list = instances();
+    let mut nexus_list_w = nexus_list.write().await;
 
-    if nexus_list.iter().any(|n| n.name == name) {
-        // FIXME: Instead of error, we return Ok without checking
-        // that the children match, which seems wrong.
-        return Ok(());
+    // FIXME: Instead of error, we return Ok without checking
+    // that the children match, which seems wrong.
+    for nexus in nexus_list_w.iter() {
+        let nexus_readable = nexus.read().await;
+        if nexus_readable.name == name {
+            return Ok(());
+        }
+        drop(nexus_readable);
     }
+
+    let nexus_instance = Nexus::new(name, size, uuid, None);
 
     // Create a new Nexus object, and immediately add it to the global list.
     // This is necessary to ensure proper cleanup, as the code responsible for
     // closing a child assumes that the nexus to which it belongs will appear
     // in the global list of nexus instances. We must also ensure that the
     // nexus instance gets removed from the global list if an error occurs.
-    nexus_list.push(Nexus::new(name, size, uuid, None));
+    nexus_list_w.push(Arc::clone(&nexus_instance));
+    let nexus_index = nexus_list_w.len() - 1;
 
     // Obtain a reference to the newly created Nexus object.
-    let ni =
-        nexus_list
-            .iter_mut()
-            .find(|n| n.name == name)
-            .ok_or_else(|| Error::NexusNotFound {
-                name: String::from(name),
-            })?;
-
+    let mut nexus_instance_w = nexus_instance.write().await;
     for child in children {
-        if let Err(error) = ni.create_and_register(child).await {
+        if let Err(error) = nexus_instance_w.create_and_register(child).await {
             error!(
                 "failed to create nexus {}: failed to create child {}: {}",
                 name, child, error
             );
-            ni.close_children().await;
-            nexus_list.retain(|n| n.name != name);
+            nexus_instance_w.close_children().await;
+            // We don't want this item anymore.
+            nexus_list_w.remove(nexus_index);
             return Err(Error::CreateChild {
                 source: error,
                 name: String::from(name),
@@ -1136,7 +1139,7 @@ pub async fn nexus_create(
         }
     }
 
-    match ni.open().await {
+    match nexus_instance_w.open().await {
         Err(Error::NexusIncomplete {
             ..
         }) => {
@@ -1145,7 +1148,8 @@ pub async fn nexus_create(
             // We need to explicitly clean up child bdevs if we get this error.
             error!("failed to open nexus {}: missing children", name);
             destroy_child_bdevs(name, children).await;
-            nexus_list.retain(|n| n.name != name);
+            // We don't want this item anymore.
+            nexus_list_w.remove(nexus_index);
             Err(Error::NexusCreate {
                 name: String::from(name),
             })
@@ -1153,8 +1157,9 @@ pub async fn nexus_create(
 
         Err(error) => {
             error!("failed to open nexus {}: {}", name, error);
-            ni.close_children().await;
-            nexus_list.retain(|n| n.name != name);
+            nexus_instance_w.close_children().await;
+            // We don't want this item anymore.
+            nexus_list_w.remove(nexus_index);
             Err(error)
         }
 
@@ -1172,11 +1177,19 @@ async fn destroy_child_bdevs(name: &str, list: &[String]) {
 }
 
 /// Lookup a nexus by its name (currently used only by test functions).
-pub fn nexus_lookup(name: &str) -> Option<&mut Nexus> {
-    instances()
-        .iter_mut()
-        .find(|n| n.name == name)
-        .map(AsMut::as_mut)
+pub async fn nexus_lookup(name: &str) -> Option<Arc<RwLock<Nexus>>> {
+    let nexus_instances = instances();
+    let nexus_instances_r = nexus_instances.read().await;
+
+    let mut found = None;
+    for instance in nexus_instances_r.iter() {
+        let instance_r = instance.read().await;
+        if instance_r.name == name {
+            found = Some(instance);
+            break;
+        }
+    }
+    found.map(Arc::clone)
 }
 
 impl Display for Nexus {

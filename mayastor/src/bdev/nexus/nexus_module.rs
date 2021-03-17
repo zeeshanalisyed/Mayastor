@@ -21,15 +21,12 @@ use crate::{
 };
 
 use super::instances;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 pub const NEXUS_NAME: &str = "NEXUS_CAS_MODULE";
 
 pub static NEXUS_MODULE: Lazy<NexusModule> = Lazy::new(NexusModule::new);
-
-#[derive(Default, Debug)]
-pub struct NexusInstances {
-    inner: UnsafeCell<Vec<Box<Nexus>>>,
-}
 
 /// A wrapper around an SPDK Nexus bdev.
 ///
@@ -37,21 +34,16 @@ pub struct NexusInstances {
 ///
 /// # Safety
 ///
-/// SPDK manages this and it is equivalent to Send/Sync. This means this type is Send/Sync.
+/// SPDK manages this and it is equivalent to Send/Sync. This means this type is
+/// Send/Sync.
 #[derive(Debug)]
 pub struct NexusModule(*mut spdk_bdev_module);
 
 // Safety: Pointer to SPDK managed structure.
 unsafe impl Sync for NexusModule {}
 
-// TODO: This is not safe.
-unsafe impl Sync for NexusInstances {}
-
 // Safety: Pointer to SPDK managed structure.
 unsafe impl Send for NexusModule {}
-
-// TODO: This is not safe.
-unsafe impl Send for NexusInstances {}
 
 impl Default for NexusModule {
     fn default() -> Self {
@@ -97,21 +89,19 @@ impl NexusModule {
         NexusModule::from_null_checked(module)
     }
 
-    /// return instances, we ensure that this can only ever be called on a
-    /// properly allocated thread
-    pub fn get_instances() -> &'static mut Vec<Box<Nexus>> {
+    pub fn get_instances() -> Arc<RwLock<Vec<Arc<RwLock<Nexus>>>>> {
         let thread = unsafe { spdk_get_thread() };
         if thread.is_null() {
             panic!("not called from SPDK thread")
         }
 
-        static NEXUS_INSTANCES: OnceCell<NexusInstances> = OnceCell::new();
+        static NEXUS_INSTANCES: OnceCell<Arc<RwLock<Vec<Arc<RwLock<Nexus>>>>>> =
+            OnceCell::new();
 
-        let global_instances = NEXUS_INSTANCES.get_or_init(|| NexusInstances {
-            inner: UnsafeCell::new(Vec::new()),
-        });
+        let global_instances =
+            NEXUS_INSTANCES.get_or_init(|| Arc::new(RwLock::new(Vec::new())));
 
-        unsafe { &mut *global_instances.inner.get() }
+        Arc::clone(global_instances)
     }
 }
 /// Implements the bdev module call back functions to register the driver to
@@ -126,7 +116,9 @@ impl NexusModule {
     extern "C" fn nexus_mod_fini() {
         info!("Unloading Nexus CAS Module");
         let _ = unsafe { CString::from_raw((*(NEXUS_MODULE.0)).name as _) };
-        Self::get_instances().clear();
+        futures::executor::block_on(async {
+            Self::get_instances().write().await.clear();
+        })
     }
 
     /// called for each bdev that gets added to the system
@@ -173,14 +165,17 @@ impl NexusModule {
     /// you should not have any iSCSI create related calls that
     /// construct children in the config file.
     extern "C" fn config_json(w: *mut spdk_json_write_ctx) -> i32 {
-        instances().iter().for_each(|nexus| {
-            let uris = nexus
-                .children
-                .iter()
-                .map(|c| c.name.clone())
-                .collect::<Vec<String>>();
+        futures::executor::block_on(|| async {
+            let nexus_list = instances();
+            let nexus_list_r = nexus_list.read().await;
+            nexus_list_r.iter().for_each(|nexus| {
+                let uris = nexus
+                    .children
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect::<Vec<String>>();
 
-            let json = json!({
+                let json = json!({
                 "method": "create_nexus",
                 "params": {
                     "name" : nexus.name,
@@ -190,17 +185,18 @@ impl NexusModule {
                 },
             });
 
-            let data =
-                CString::new(serde_json::to_string(&json).unwrap()).unwrap();
-            unsafe {
-                spdk_json_write_val_raw(
-                    w,
-                    data.as_ptr() as *const _,
-                    data.as_bytes().len() as u64,
-                );
-            }
-        });
-        0
+                let data =
+                    CString::new(serde_json::to_string(&json).unwrap()).unwrap();
+                unsafe {
+                    spdk_json_write_val_raw(
+                        w,
+                        data.as_ptr() as *const _,
+                        data.as_bytes().len() as u64,
+                    );
+                }
+            });
+            0
+        })
     }
 }
 

@@ -158,11 +158,16 @@ impl mayastor_server::Mayastor for MayastorSvc {
     ) -> GrpcResult<ListNexusReply> {
         let args = request.into_inner();
         trace!("{:?}", args);
+
+        let mut nexus_list_grpc = vec![];
+        let nexus_list = instances();
+        for nexus_instance in nexus_list.read().await.iter() {
+            let nexus_grpc = nexus_instance.read().await.to_grpc();
+            nexus_list_grpc.push(nexus_grpc);
+        }
+
         let reply = ListNexusReply {
-            nexus_list: instances()
-                .iter()
-                .map(|n| n.to_grpc())
-                .collect::<Vec<_>>(),
+            nexus_list: nexus_list_grpc,
         };
         trace!("{:?}", reply);
         Ok(Response::new(reply))

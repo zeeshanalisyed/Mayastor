@@ -70,7 +70,8 @@ impl Display for SubType {
 ///
 /// # Safety
 ///
-/// SPDK considers this structure threadsafe. This means this structure can be Send/Sync.
+/// SPDK considers this structure threadsafe. This means this structure can be
+/// Send/Sync.
 ///
 /// See more: https://github.com/spdk/spdk/blob/312a9d603dfc7dfb7061f33fa3f1fec766579dc7/lib/nvmf/nvmf_internal.h#L264-L305
 pub struct NvmfSubsystem(pub(crate) NonNull<spdk_nvmf_subsystem>);

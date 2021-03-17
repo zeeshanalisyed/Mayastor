@@ -420,39 +420,34 @@ impl Config {
     async fn start_rebuilds(&self) {
         if let Some(nexuses) = self.nexus_bdevs.as_ref() {
             for nexus in nexuses {
-                if let Some(nexus_instance) =
-                    instances().iter().find(|n| n.name == nexus.name)
-                {
-                    let degraded_children: Vec<&NexusChild> = nexus_instance
-                        .children
-                        .iter()
-                        .filter(|child| {
-                            child.state()
-                                == ChildState::Faulted(Reason::OutOfSync)
-                        })
-                        .collect::<Vec<_>>();
+                let nexus_instances = instances();
+                let nexus_instances_r = nexus_instances.read().await;
 
-                    // Get a mutable reference to the nexus instance. We can't
-                    // do this when we first get the nexus instance (above)
-                    // because it would cause multiple mutable borrows.
-                    // We use "expect" here because we have already checked that
-                    // the nexus exists above so we don't expect this to fail.
-                    let nexus_instance = instances()
-                        .iter_mut()
-                        .find(|n| n.name == nexus.name)
-                        .expect("Failed to find nexus");
+                for nexus_instance in nexus_instances_r.iter() {
+                    let mut nexus_instance_w = nexus_instance.write().await;
+                    if nexus_instance_w.name == nexus.name {
+                        let degraded_children = nexus_instance_w
+                            .children
+                            .iter()
+                            .filter(|child| {
+                                child.state()
+                                    == ChildState::Faulted(Reason::OutOfSync)
+                            })
+                            .map(|child| child.name.clone())
+                            .collect::<Vec<_>>();
 
-                    for child in degraded_children {
-                        dbg!("Start rebuilding child {}", &child.name);
-                        if nexus_instance
-                            .start_rebuild(&child.name)
-                            .await
-                            .is_err()
-                        {
-                            error!("Failed to start rebuild for {}", child);
+                        for child in degraded_children {
+                            dbg!("Start rebuilding child {}", &child);
+                            if nexus_instance_w
+                                .start_rebuild(&child)
+                                .await
+                                .is_err()
+                            {
+                                error!("Failed to start rebuild for {}", child);
+                            }
                         }
                     }
-                }
+                };
             }
         }
     }
