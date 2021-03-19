@@ -125,24 +125,24 @@ impl NexusModule {
             .iter_mut()
             .filter(|nexus| *nexus.state.lock().unwrap() == NexusState::Init)
             .any(|nexus| {
-                if nexus.examine_child(&name) {
-                    info!(
-                        "child {} for nexus {} came online",
-                        name, nexus.name
-                    );
-                    // we use block on here as it makes any log message
-                    // show in within proper order. We can also dispatch
-                    // a future and have it executed at the next poll, but
-                    // this is more inline with what the other modules are
-                    // doing as well.
-                    Reactor::block_on(async move {
+                Reactor::block_on(async move {
+                    if nexus.examine_child(&name).await {
+                        info!(
+                            "child {} for nexus {} came online",
+                            name, nexus.name
+                        );
+                        // we use block on here as it makes any log message
+                        // show in within proper order. We can also dispatch
+                        // a future and have it executed at the next poll, but
+                        // this is more inline with what the other modules are
+                        // doing as well.
                         if nexus.open().await.is_err() {
                             debug!("nexus {} still not completed", nexus.name);
                         }
-                    });
-                    return true;
-                }
-                false
+                        return true;
+                    }
+                    false
+                }).unwrap()
             });
 
         unsafe {
@@ -163,8 +163,8 @@ impl NexusModule {
         instances().iter().for_each(|nexus| {
             let uris = nexus
                 .children
-                .iter()
-                .map(|c| c.name.clone())
+                .keys()
+                .cloned()
                 .collect::<Vec<String>>();
 
             let json = json!({

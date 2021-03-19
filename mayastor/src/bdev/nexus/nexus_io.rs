@@ -318,7 +318,8 @@ impl Bio {
         error!("{:#?}", child);
 
         if let Some(nexus) = nexus_lookup(&nexus) {
-            if let Some(child) = nexus.child_lookup(&child.name()) {
+            if let Some(child_m) = nexus.children.get(&child.name()) {
+                let mut child = child_m.lock().await;
                 let current_state = child.state.compare_and_swap(
                     ChildState::Open,
                     ChildState::Faulted(Reason::IoError),
@@ -345,7 +346,7 @@ impl Bio {
                     }
 
                     nexus.resume().await.unwrap();
-                    if nexus.status() == NexusStatus::Faulted {
+                    if nexus.status().await == NexusStatus::Faulted {
                         error!(":{} has no children left... ", nexus);
                     }
                 }

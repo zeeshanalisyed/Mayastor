@@ -47,6 +47,8 @@ use crate::{
     core::Bdev,
     nexus_uri::{bdev_create, bdev_destroy, NexusBdevError},
 };
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 impl Nexus {
     /// register children with the nexus, only allowed during the nexus init
@@ -58,11 +60,11 @@ impl Nexus {
             .iter()
             .map(|c| {
                 debug!("{}: Adding child {}", self.name, c);
-                self.children.push(NexusChild::new(
+                self.children.insert(self.name.clone(), Arc::new(Mutex::new(NexusChild::new(
                     c.clone(),
                     self.name.clone(),
                     Bdev::lookup_by_name(c),
-                ))
+                ))))
             })
             .for_each(drop);
     }
@@ -75,11 +77,11 @@ impl Nexus {
     ) -> Result<(), NexusBdevError> {
         assert_eq!(*self.state.lock().unwrap(), NexusState::Init);
         let name = bdev_create(&uri).await?;
-        self.children.push(NexusChild::new(
+        self.children.insert(self.name.clone(), Arc::new(Mutex::new(NexusChild::new(
             uri.to_string(),
             self.name.clone(),
             Bdev::lookup_by_name(&name),
-        ));
+        ))));
 
         self.child_count += 1;
         Ok(())
@@ -109,7 +111,10 @@ impl Nexus {
                     e.verbose()
                 );
                 match self.get_child_by_name(uri) {
-                    Ok(child) => child.fault(Reason::RebuildFailed).await,
+                    Ok(child_m) => {
+                        let mut child = child_m.lock().await;
+                        child.fault(Reason::RebuildFailed).await
+                    },
                     Err(e) => error!(
                         "Failed to find newly added child {}, error: {}",
                         uri,
@@ -134,7 +139,7 @@ impl Nexus {
         let child_bdev = match Bdev::lookup_by_name(&name) {
             Some(child) => {
                 if child.block_len() != self.bdev.block_len()
-                    || self.min_num_blocks() > child.num_blocks()
+                    || self.min_num_blocks().await > child.num_blocks()
                 {
                     if let Err(err) = bdev_destroy(uri).await {
                         error!(
@@ -176,11 +181,11 @@ impl Nexus {
                 // it can never take part in the IO path
                 // of the nexus until it's rebuilt from a healthy child.
                 child.fault(Reason::OutOfSync).await;
-                if ChildStatusConfig::add(&child).is_err() {
+                if ChildStatusConfig::add(&child).await.is_err() {
                     error!("Failed to add child status information");
                 }
 
-                self.children.push(child);
+                self.children.insert(child.name.clone(), Arc::new(Mutex::new(child)));
                 self.child_count += 1;
 
                 if let Err(e) = self.sync_labels().await {
@@ -188,7 +193,7 @@ impl Nexus {
                     // todo: how to signal this?
                 }
 
-                Ok(self.status())
+                Ok(self.status().await)
             }
             Err(e) => {
                 if let Err(err) = bdev_destroy(uri).await {
@@ -218,20 +223,21 @@ impl Nexus {
         let cancelled_rebuilding_children =
             self.cancel_child_rebuild_jobs(uri).await;
 
-        let idx = match self.children.iter().position(|c| c.name == uri) {
+        match self.children.get(uri) {
             None => return Ok(()),
-            Some(val) => val,
+            Some(child_m) => {
+                let mut child = child_m.lock().await;
+                if let Err(e) = child.close().await {
+                    return Err(Error::CloseChild {
+                        name: self.name.clone(),
+                        child: child.name.clone(),
+                        source: e,
+                    });
+                }
+            },
         };
 
-        if let Err(e) = self.children[idx].close().await {
-            return Err(Error::CloseChild {
-                name: self.name.clone(),
-                child: self.children[idx].name.clone(),
-                source: e,
-            });
-        }
-
-        self.children.remove(idx);
+        self.children.remove(uri);
         self.child_count -= 1;
 
         // Update child status to remove this child
@@ -251,7 +257,8 @@ impl Nexus {
         let cancelled_rebuilding_children =
             self.cancel_child_rebuild_jobs(name).await;
 
-        if let Some(child) = self.children.iter_mut().find(|c| c.name == name) {
+        if let Some(child_m) = self.children.get(name) {
+            let mut child = child_m.lock().await;
             child.offline().await;
         } else {
             return Err(Error::ChildNotFound {
@@ -263,7 +270,7 @@ impl Nexus {
         self.reconfigure(DrEvent::ChildOffline).await;
         self.start_rebuild_jobs(cancelled_rebuilding_children).await;
 
-        Ok(self.status())
+        Ok(self.status().await)
     }
 
     /// fault a child device and reconfigure the IO channels
@@ -281,11 +288,13 @@ impl Nexus {
             });
         }
 
-        let healthy_children = self
-            .children
-            .iter()
-            .filter(|c| c.state() == ChildState::Open)
-            .collect::<Vec<_>>();
+        let mut healthy_children = Vec::new();
+        for (_name, child_m) in self.children.iter() {
+            let child = child_m.lock().await;
+            if child.state() == ChildState::Open {
+                healthy_children.push(child);
+            }
+        }
 
         if healthy_children.len() == 1 && healthy_children[0].name == name {
             // the last healthy child cannot be faulted
@@ -294,12 +303,14 @@ impl Nexus {
                 child: name.to_owned(),
             });
         }
+        drop(healthy_children);
 
         let cancelled_rebuilding_children =
             self.cancel_child_rebuild_jobs(name).await;
 
-        let result = match self.children.iter_mut().find(|c| c.name == name) {
-            Some(child) => {
+        let result = match self.children.get(name) {
+            Some(child_m) => {
+                let mut child = child_m.lock().await;
                 match child.state() {
                     ChildState::Faulted(_) => {}
                     _ => {
@@ -331,76 +342,82 @@ impl Nexus {
     ) -> Result<NexusStatus, Error> {
         trace!("{} Online child request", self.name);
 
-        if let Some(child) = self.children.iter_mut().find(|c| c.name == name) {
+        if let Some(child_m) = self.children.get(name) {
+            let mut child = child_m.lock().await;
             child.online(self.size).await.context(OpenChild {
                 child: name.to_owned(),
                 name: self.name.clone(),
             })?;
-            self.start_rebuild(name).await.map(|_| {})?;
-            Ok(self.status())
         } else {
-            Err(Error::ChildNotFound {
+            return Err(Error::ChildNotFound {
                 name: self.name.clone(),
                 child: name.to_owned(),
             })
         }
+        self.start_rebuild(name).await.map(|_| {})?;
+        Ok(self.status().await)
     }
 
     /// Close each child that belongs to this nexus.
     pub(crate) async fn close_children(&mut self) {
-        let futures = self.children.iter_mut().map(|c| c.close());
-        let results = join_all(futures).await;
-        if results.iter().any(|c| c.is_err()) {
-            error!("{}: Failed to close children", self.name);
+        for (_name, child_m) in self.children.iter_mut() {
+            let mut child = child_m.lock().await;
+            if let Err(error) = child.close().await {
+                error!(?error, "{}: Failed to close children", self.name);
+            }
         }
     }
 
     /// Add a child to the configuration when an example callback is run.
     /// The nexus is not opened implicitly, call .open() for this manually.
-    pub fn examine_child(&mut self, name: &str) -> bool {
-        self.children
-            .iter_mut()
-            .filter(|c| c.state() == ChildState::Init && c.name == name)
-            .any(|c| {
+    pub async fn examine_child(&mut self, name: &str) -> bool {
+        match self.children.get(name) {
+            Some(child_m) => {
                 if let Some(bdev) = Bdev::lookup_by_name(name) {
-                    c.bdev = Some(bdev);
+                    let mut child = child_m.lock().await;
+                    child.bdev = Some(bdev);
                     return true;
+                } else {
+                    false
                 }
-                false
-            })
+            },
+            None => false,
+        }
     }
 
     /// try to open all the child devices
     pub(crate) async fn try_open_children(&mut self) -> Result<(), Error> {
-        if self.children.is_empty()
-            || self.children.iter().any(|c| c.bdev.is_none())
-        {
-            return Err(Error::NexusIncomplete {
-                name: self.name.clone(),
-            });
+        // Set the common block size.
+        let mut blk_size = None;
+        for (_key, child_m) in &self.children {
+            let child = child_m.lock().await;
+            if child.bdev.is_none() {
+                return Err(Error::NexusIncomplete {
+                    name: self.name.clone(),
+                });
+            }
+            if let Some(blk_size) = blk_size {
+                if child.bdev.as_ref().unwrap().block_len() != blk_size {
+                    return Err(Error::MixedBlockSizes {
+                        name: self.name.clone(),
+                    });
+                }
+            } else {
+                blk_size = Some(child.bdev.as_ref().unwrap().block_len());
+            }
         }
-
-        let blk_size = self.children[0].bdev.as_ref().unwrap().block_len();
-
-        if self
-            .children
-            .iter()
-            .any(|b| b.bdev.as_ref().unwrap().block_len() != blk_size)
-        {
-            return Err(Error::MixedBlockSizes {
-                name: self.name.clone(),
-            });
-        }
-
-        self.bdev.set_block_len(blk_size);
+        self.bdev.set_block_len(blk_size.unwrap());
 
         let size = self.size;
 
-        let (open, error): (Vec<_>, Vec<_>) = self
-            .children
-            .iter_mut()
-            .map(|c| c.open(size))
-            .partition(Result::is_ok);
+        let (mut open, mut error) = (Vec::new(), Vec::new());
+        for (_key, child_m) in &self.children {
+            let mut child = child_m.lock().await;
+            match child.open(size) {
+                Ok(c) => open.push(c),
+                Err(e) => error.push(e),
+            }
+        }
 
         // depending on IO consistency policies, we might be able to go online
         // even if one of the children failed to open. This is work is not
@@ -408,11 +425,11 @@ impl Nexus {
 
         if !error.is_empty() {
             for open_child in open {
-                let name = open_child.unwrap();
+                let name = open_child;
                 if let Some(child) =
-                    self.children.iter_mut().find(|c| c.name == name)
+                    self.children.get(&name)
                 {
-                    if let Err(e) = child.close().await {
+                    if let Err(e) = child.lock().await.close().await {
                         error!(
                             "{}: child {} failed to close with error {}",
                             self.name,
@@ -429,59 +446,48 @@ impl Nexus {
             });
         }
 
-        self.children
-            .iter()
-            .map(|c| c.bdev.as_ref().unwrap().alignment())
-            .collect::<Vec<_>>()
-            .iter()
-            .map(|s| {
-                if self.bdev.alignment() < *s {
-                    trace!(
-                        "{}: child has alignment {}, updating required_alignment from {}",
-                        self.name, *s, self.bdev.alignment()
-                    );
-                    unsafe {
-                        (*self.bdev.as_ptr()).required_alignment = *s as u8;
-                    }
+        for (_key, child_m) in &self.children {
+            let child = child_m.lock().await;
+            let alignment = child.bdev.as_ref().unwrap().alignment();
+            if self.bdev.alignment() < alignment {
+                trace!(
+                    "{}: child has alignment {}, updating required_alignment from {}",
+                    self.name, alignment, self.bdev.alignment()
+                );
+                unsafe {
+                    (*self.bdev.as_ptr()).required_alignment = alignment as u8;
                 }
-            })
-            .for_each(drop);
+            }
+        }
+
         Ok(())
     }
 
     /// The nexus is allowed to be smaller then the underlying child devices
     /// this function returns the smallest blockcnt of all online children as
     /// they MAY vary in size.
-    pub(crate) fn min_num_blocks(&self) -> u64 {
-        let mut blockcnt = std::u64::MAX;
-        self.children
-            .iter()
-            .filter(|c| c.state() == ChildState::Open)
-            .map(|c| c.bdev.as_ref().unwrap().num_blocks())
-            .collect::<Vec<_>>()
-            .iter()
-            .map(|s| {
-                if *s < blockcnt {
-                    blockcnt = *s;
-                }
-            })
-            .for_each(drop);
-        blockcnt
+    pub(crate) async fn min_num_blocks(&self) -> u64 {
+        let mut smallest_blkcnt = std::u64::MAX;
+        for (_name, child_m) in self.children.iter() {
+            let child = child_m.lock().await;
+            let num_blocks = child.bdev.as_ref().unwrap().num_blocks();
+            if smallest_blkcnt > num_blocks {
+                smallest_blkcnt = num_blocks;
+            }
+        }
+        smallest_blkcnt
     }
 
     /// lookup a child by its name
-    pub fn child_lookup(&self, name: &str) -> Option<&NexusChild> {
-        self.children
-            .iter()
-            .filter(|c| c.bdev.as_ref().is_some())
-            .find(|c| c.bdev.as_ref().unwrap().name() == name)
+    pub fn child_lookup(&self, name: &str) -> Option<&Arc<Mutex<NexusChild>>> {
+        self.children.get(name)
     }
 
     pub fn get_child_by_name(
         &mut self,
         name: &str,
-    ) -> Result<&mut NexusChild, Error> {
-        match self.children.iter_mut().find(|c| c.name == name) {
+    ) -> Result<&Arc<Mutex<NexusChild>>, Error> {
+        match self.children.get(name) {
             Some(child) => Ok(child),
             None => Err(Error::ChildNotFound {
                 child: name.to_owned(),

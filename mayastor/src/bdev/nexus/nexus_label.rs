@@ -1293,7 +1293,8 @@ impl Nexus {
         )?;
         let data_offset = reference[1].ent_start;
 
-        for child in self.children.iter_mut() {
+        for (_name, child_m) in self.children.iter_mut() {
+            let child = child_m.lock().await;
             let handle = child.handle().context(HandleError {
                 name: child.name.clone(),
             })?;
@@ -1322,7 +1323,8 @@ impl Nexus {
         &self,
         guid: GptGuid,
     ) -> Result<Option<LabelConfig>, LabelError> {
-        for child in self.children.iter() {
+        for (_key, child_m) in self.children.iter() {
+            let mut child = child_m.lock().await;
             match child.probe_label().await {
                 Ok(label) => {
                     if label.primary.guid != guid {
@@ -1369,7 +1371,8 @@ impl Nexus {
             nexus_blocks,
         )?;
 
-        for child in self.children.iter_mut() {
+        for (_key, child_m) in self.children.iter_mut() {
+            let mut child = child_m.lock().await;
             let handle = child.handle().context(HandleError {
                 name: child.name.clone(),
             })?;
@@ -1411,7 +1414,8 @@ impl Nexus {
         )?;
         let data_offset = reference[1].ent_start;
 
-        for child in self.children.iter_mut() {
+        for (_key, child_m) in self.children.iter_mut() {
+            let mut child = child_m.lock().await;
             let handle = child.handle().context(HandleError {
                 name: child.name.clone(),
             })?;

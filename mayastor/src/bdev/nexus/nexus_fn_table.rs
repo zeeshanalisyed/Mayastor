@@ -76,7 +76,7 @@ impl NexusFnTable {
             | IoType::Reset
             | IoType::Unmap
             | IoType::WriteZeros => {
-                let supported = nexus.io_is_supported(_io_type);
+                let supported = futures::executor::block_on(nexus.io_is_supported(_io_type));
                 if !supported {
                     trace!(
                         "IO type {:?} not supported for {}",
@@ -111,7 +111,7 @@ impl NexusFnTable {
     }
 
     /// Submit an IO to the children at the first or subsequent attempts.
-    pub(crate) fn io_submit_or_resubmit(
+    pub(crate) async fn io_submit_or_resubmit(
         channel: *mut spdk_io_channel,
         nio: &mut Bio,
     ) {
@@ -136,7 +136,7 @@ impl NexusFnTable {
                 nexus.reset(&nio, &ch)
             }
             IoType::Unmap => {
-                if nexus.io_is_supported(io_type) {
+                if nexus.io_is_supported(io_type).await {
                     nexus.unmap(&nio, &ch)
                 } else {
                     nio.fail();
@@ -150,7 +150,7 @@ impl NexusFnTable {
                 nio.ok();
             }
             IoType::WriteZeros => {
-                if nexus.io_is_supported(io_type) {
+                if nexus.io_is_supported(io_type).await {
                     nexus.write_zeroes(&nio, &ch)
                 } else {
                     nio.fail()
@@ -196,9 +196,14 @@ impl NexusFnTable {
             );
         };
 
-        let data =
-            CString::new(serde_json::to_string(&nexus.children).unwrap())
-                .unwrap();
+        let mut json = Vec::new();
+        for (_name, child_m) in nexus.children {
+            futures::executor::block_on(async {
+                let child = child_m.lock().await;
+                json.push(serde_json::to_string(&*child).unwrap());
+            });
+        }
+        let data = CString::new(serde_json::to_string(&json).unwrap()).unwrap();
 
         unsafe {
             spdk_json_write_val_raw(

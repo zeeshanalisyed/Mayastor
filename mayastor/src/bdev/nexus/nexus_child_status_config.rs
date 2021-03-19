@@ -84,7 +84,8 @@ impl ChildStatusConfig {
         debug!("Applying child status");
         let store = &ChildStatusConfig::get().status;
         for nexus in instances() {
-            nexus.children.iter_mut().for_each(|child| {
+            for (_name, child_m) in nexus.children.iter() {
+                let child = child_m.lock().await;
                 if let Some(status) = store.get(&child.name) {
                     info!(
                         "Apply state to child {}, reasons {:?}",
@@ -92,18 +93,18 @@ impl ChildStatusConfig {
                     );
                     child.set_state(*status);
                 }
-            });
+            }
             nexus.reconfigure(DrEvent::ChildStatusSync).await;
         }
     }
 
     /// A public wrapper around the actual save function.
-    pub(crate) fn save() -> Result<(), std::io::Error> {
-        ChildStatusConfig::do_save(None)
+    pub(crate) async fn save() -> Result<(), std::io::Error> {
+        ChildStatusConfig::do_save(None).await
     }
 
     /// Save the status of all children to the configuration file.
-    fn do_save(cfg: Option<ChildStatusConfig>) -> Result<(), std::io::Error> {
+    async fn do_save(cfg: Option<ChildStatusConfig>) -> Result<(), std::io::Error> {
         let cfg_file;
         unsafe {
             match CONFIG_FILE.clone() {
@@ -124,11 +125,12 @@ impl ChildStatusConfig {
             },
         };
 
-        instances().iter().for_each(|nexus| {
-            nexus.children.iter().for_each(|child| {
+        for nexus in instances().iter() {
+            for (_name, child_m) in nexus.children.iter() {
+                let child = child_m.lock().await;
                 status_cfg.status.insert(child.name.clone(), child.state());
-            });
-        });
+            }
+        }
 
         match serde_yaml::to_string(&status_cfg) {
             Ok(s) => {
@@ -148,12 +150,12 @@ impl ChildStatusConfig {
     /// the status is changed before it is added to the nexus children list.
     /// Therefore, we have to explicitly add the child to the configuration
     /// here.
-    pub(crate) fn add(child: &NexusChild) -> Result<(), std::io::Error> {
+    pub(crate) async fn add(child: &NexusChild) -> Result<(), std::io::Error> {
         let mut cfg = ChildStatusConfig {
             status: HashMap::new(),
         };
         cfg.status.insert(child.name.clone(), child.state());
-        ChildStatusConfig::do_save(Some(cfg))
+        ChildStatusConfig::do_save(Some(cfg)).await
     }
 
     /// Initialise the config file location

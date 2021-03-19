@@ -59,17 +59,20 @@ impl Nexus {
     ///
     /// We cannot use From trait because it is not value to value conversion.
     /// All we have is a reference to nexus.
-    pub fn to_grpc(&self) -> rpc::Nexus {
+    pub async fn to_grpc(&self) -> rpc::Nexus {
         rpc::Nexus {
             uuid: name_to_uuid(&self.name).to_string(),
             size: self.size,
-            state: rpc::NexusState::from(self.status()) as i32,
+            state: rpc::NexusState::from(self.status().await) as i32,
             device_uri: self.get_share_uri().unwrap_or_default(),
-            children: self
-                .children
-                .iter()
-                .map(|ch| ch.to_grpc())
-                .collect::<Vec<_>>(),
+            children: {
+                let mut children = Vec::new();
+                for (_name, child_m) in self.children.iter() {
+                    let child = child_m.lock().await;
+                    children.push(child.to_grpc())
+                }
+                children
+            },
             rebuilds: RebuildJob::count() as u32,
         }
     }
@@ -124,7 +127,9 @@ pub async fn nexus_add_child(
     // For that we need api to check existence of child by name (not uri that
     // contain parameters that may change).
     n.add_child(&args.uri, args.norebuild).await?;
-    n.get_child_by_name(&args.uri).map(|ch| ch.to_grpc())
+    let child_m = n.get_child_by_name(&args.uri)?;
+    let child = child_m.lock().await;
+    Ok(child.to_grpc())
 }
 
 /// Idempotent destruction of the nexus.

@@ -279,7 +279,8 @@ impl Nexus {
             }
         };
         trace!("Adding error record {:?} bdev {:?}", io_op_type, bdev);
-        for child in nexus.children.iter_mut() {
+        for (_key, child_m) in nexus.children.iter() {
+            let mut child = child_m.lock().await;
             if let Some(bdev) = child.bdev.as_ref() {
                 if bdev.as_ptr() as *const _ == bdev {
                     if child.state() == ChildState::Open {
@@ -302,6 +303,7 @@ impl Nexus {
                             {
                                 let child_name = child.name.clone();
                                 info!("Faulting child {}", child_name);
+                                drop(child);
                                 if nexus
                                     .fault_child(&child_name, Reason::IoError)
                                     .await
@@ -331,7 +333,7 @@ impl Nexus {
         }
     }
 
-    pub fn error_record_query(
+    pub async fn error_record_query(
         &self,
         child_name: &str,
         io_op_flags: u32,
@@ -346,9 +348,8 @@ impl Nexus {
         };
         let cfg = Config::get();
         if cfg.err_store_opts.enable_err_store {
-            if let Some(child) =
-                self.children.iter().find(|c| c.name == child_name)
-            {
+            if let Some(child_m) = self.children.get(child_name) {
+                let child = child_m.lock().await;
                 if child.err_store.as_ref().is_some() {
                     Ok(Some(child.err_store.as_ref().unwrap().query(
                         io_op_flags,

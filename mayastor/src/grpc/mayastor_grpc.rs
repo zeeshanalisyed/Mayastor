@@ -131,7 +131,7 @@ impl mayastor_server::Mayastor for MayastorSvc {
             }};
             let nexus = nexus_lookup(&uuid)?;
             info!("Created nexus {}", uuid);
-            Ok(Response::new(nexus.to_grpc()))
+            Ok(Response::new(nexus.to_grpc().await))
         }).await
     }
 
@@ -159,10 +159,13 @@ impl mayastor_server::Mayastor for MayastorSvc {
         let args = request.into_inner();
         trace!("{:?}", args);
         let reply = ListNexusReply {
-            nexus_list: instances()
-                .iter()
-                .map(|n| n.to_grpc())
-                .collect::<Vec<_>>(),
+            nexus_list: {
+                let mut nexus_list = Vec::new();
+                for nexus in instances() {
+                    nexus_list.push(nexus.to_grpc().await)
+                }
+                nexus_list
+            },
         };
         trace!("{:?}", reply);
         Ok(Response::new(reply))

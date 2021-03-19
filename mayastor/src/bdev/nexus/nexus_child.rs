@@ -27,6 +27,7 @@ use crate::{
 };
 use crossbeam::atomic::AtomicCell;
 use futures::{channel::mpsc, SinkExt, StreamExt};
+use tokio::sync::Mutex;
 
 #[derive(Debug, Snafu)]
 pub enum ChildError {
@@ -327,8 +328,8 @@ impl NexusChild {
     }
 
     /// Save the state of the children to the config file
-    pub(crate) fn save_state_change() {
-        if ChildStatusConfig::save().is_err() {
+    pub(crate) async fn save_state_change() {
+        if ChildStatusConfig::save().await.is_err() {
             error!("Failed to save child status information");
         }
     }
@@ -552,13 +553,14 @@ impl NexusChild {
 }
 
 /// Looks up a child based on the underlying bdev name
-pub fn lookup_child_from_bdev(bdev_name: &str) -> Option<&mut NexusChild> {
+pub async fn lookup_child_from_bdev(bdev_name: &str) -> Option<Arc<Mutex<NexusChild>>> {
     for nexus in instances() {
-        for child in &mut nexus.children {
+        for (_name, child_m) in nexus.children.iter() {
+            let child = child_m.lock().await;
             if child.bdev.is_some()
                 && child.bdev.as_ref().unwrap().name() == bdev_name
             {
-                return Some(child);
+                return Some(Arc::clone(child_m));
             }
         }
     }

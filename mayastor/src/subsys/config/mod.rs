@@ -423,14 +423,13 @@ impl Config {
                 if let Some(nexus_instance) =
                     instances().iter().find(|n| n.name == nexus.name)
                 {
-                    let degraded_children: Vec<&NexusChild> = nexus_instance
-                        .children
-                        .iter()
-                        .filter(|child| {
-                            child.state()
-                                == ChildState::Faulted(Reason::OutOfSync)
-                        })
-                        .collect::<Vec<_>>();
+                    let mut degraded_children = Vec::new();
+                    for (_name, child_m) in nexus_instance.children.iter() {
+                        let child = child_m.lock().await;
+                        if child.state() == ChildState::Faulted(Reason::OutOfSync) {
+                            degraded_children.push(child.name.clone());
+                        }
+                    }
 
                     // Get a mutable reference to the nexus instance. We can't
                     // do this when we first get the nexus instance (above)
@@ -442,14 +441,14 @@ impl Config {
                         .find(|n| n.name == nexus.name)
                         .expect("Failed to find nexus");
 
-                    for child in degraded_children {
-                        dbg!("Start rebuilding child {}", &child.name);
+                    for child_name in degraded_children {
+                        dbg!("Start rebuilding child {}", &child_name);
                         if nexus_instance
-                            .start_rebuild(&child.name)
+                            .start_rebuild(&child_name)
                             .await
                             .is_err()
                         {
-                            error!("Failed to start rebuild for {}", child);
+                            error!("Failed to start rebuild for {}", child_name);
                         }
                     }
                 }

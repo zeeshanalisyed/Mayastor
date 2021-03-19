@@ -17,6 +17,8 @@ use rpc::mayastor::NvmeAnaState;
 use serde::Serialize;
 use snafu::{ResultExt, Snafu};
 use tonic::{Code, Status};
+use tokio::sync::Mutex;
+use std::sync::Arc;
 
 use spdk_sys::{
     spdk_bdev,
@@ -62,6 +64,7 @@ use crate::{
     subsys::{Config, NvmfSubsystem},
 };
 use std::ptr::NonNull;
+use std::collections::HashMap;
 
 /// Obtain the full error chain
 pub trait VerboseError {
@@ -332,7 +335,7 @@ pub struct Nexus {
     /// number of children part of this nexus
     pub(crate) child_count: u32,
     /// vector of children
-    pub children: Vec<NexusChild>,
+    pub children: HashMap<String, Arc<Mutex<NexusChild>>>,
     /// inner bdev
     pub(crate) bdev: Bdev,
     /// raw pointer to bdev (to destruct it later using Box::from_raw())
@@ -431,7 +434,7 @@ impl Nexus {
         let mut n = Box::new(Nexus {
             name: name.to_string(),
             child_count: 0,
-            children: Vec::new(),
+            children: Default::default(),
             bdev: Bdev::from(&*b as *const _ as *mut spdk_bdev),
             state: std::sync::Mutex::new(NexusState::Init),
             bdev_raw: Box::into_raw(b),
@@ -541,7 +544,8 @@ impl Nexus {
         let nexus_name = self.name.clone();
         Reactor::block_on(async move {
             let nexus = nexus_lookup(&nexus_name).expect("Nexus not found");
-            for child in &mut nexus.children {
+            for (_name, child_m) in &mut nexus.children {
+                let mut child = child_m.lock().await;
                 if child.state() == ChildState::Open {
                     if let Err(e) = child.close().await {
                         error!(
@@ -587,11 +591,13 @@ impl Nexus {
 
         // wait for all rebuild jobs to be cancelled before proceeding with the
         // destruction of the nexus
-        for child in self.children.iter() {
+        for (_name, child_m) in self.children.iter() {
+            let mut child = child_m.lock().await;
             self.cancel_child_rebuild_jobs(&child.name).await;
         }
 
-        for child in self.children.iter_mut() {
+        for (_name, child_m) in self.children.iter_mut() {
+            let mut child = child_m.lock().await;
             info!("Destroying child bdev {}", child.name);
             if let Err(e) = child.close().await {
                 // TODO: should an error be returned here?
@@ -714,7 +720,8 @@ impl Nexus {
                 unsafe {
                     spdk_io_device_unregister(self.as_ptr(), None);
                 }
-                for child in &mut self.children {
+                for (_name, child_m) in &mut self.children {
+                    let mut child = child_m.lock().await;
                     if let Err(e) = child.close().await {
                         error!(
                             "{}: child {} failed to close with error {}",
@@ -745,11 +752,16 @@ impl Nexus {
     /// determine if any of the children do not support the requested
     /// io type. Break the loop on first occurrence.
     /// TODO: optionally add this check during nexus creation
-    pub fn io_is_supported(&self, io_type: IoType) -> bool {
-        self.children
-            .iter()
-            .filter_map(|e| e.bdev.as_ref())
-            .any(|b| b.io_type_supported(io_type))
+    pub async fn io_is_supported(&self, io_type: IoType) -> bool {
+        for (_name, child_m) in self.children.iter() {
+            let child = child_m.lock().await;
+            if let Some(bdev) = &child.bdev {
+                if bdev.io_type_supported(io_type) == false {
+                    return false
+                }
+            }
+        }
+        true
     }
 
     /// main IO completion routine
@@ -1057,27 +1069,23 @@ impl Nexus {
     /// Faulted
     /// No child is online so the nexus is faulted
     /// This may be made more configurable in the future
-    pub fn status(&self) -> NexusStatus {
+    pub async fn status(&self) -> NexusStatus {
         match *self.state.lock().unwrap() {
             NexusState::Init => NexusStatus::Degraded,
             NexusState::Closed => NexusStatus::Faulted,
             NexusState::Open => {
-                if self
-                    .children
-                    .iter()
-                    // All children are online, so the Nexus is also online
-                    .all(|c| c.state() == ChildState::Open)
-                {
+                let mut healthy = 0;
+                for (_name, child_m) in self.children.iter() {
+                    let child = child_m.lock().await;
+                    if child.state() == ChildState::Open {
+                        healthy += 1;
+                    }
+                }
+                if healthy == self.children.len() {
                     NexusStatus::Online
-                } else if self
-                    .children
-                    .iter()
-                    // at least one child online, so the Nexus is also online
-                    .any(|c| c.state() == ChildState::Open)
-                {
+                } else if healthy >= 0 {
                     NexusStatus::Degraded
                 } else {
-                    // nexus has no children or at least no child is online
                     NexusStatus::Faulted
                 }
             }
@@ -1184,19 +1192,13 @@ pub fn nexus_lookup(name: &str) -> Option<&mut Nexus> {
 
 impl Display for Nexus {
     fn fmt(&self, f: &mut Formatter) -> Result<(), std::fmt::Error> {
-        let _ = writeln!(
-            f,
-            "{}: state: {:?} blk_cnt: {}, blk_size: {}",
-            self.name,
-            self.state,
-            self.bdev.num_blocks(),
-            self.bdev.block_len(),
-        );
+        f.debug_struct("Nexus")
+            .field("name", &self.name)
+            .field("state", &self.state)
+            .field("blk_cnt", &self.bdev.num_blocks())
+            .field("blk_size", &self.bdev.block_len())
+            .field("children", &self.children.keys().collect::<Vec<_>>());
 
-        self.children
-            .iter()
-            .map(|c| write!(f, "\t{}", c))
-            .for_each(drop);
         Ok(())
     }
 }

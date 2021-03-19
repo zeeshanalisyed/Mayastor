@@ -18,6 +18,7 @@ use crate::{
     bdev::{nexus::nexus_child::ChildState, Nexus, Reason},
     core::{BdevHandle, Mthread},
 };
+use crate::bdev::nexus::nexus_child::ChildError::ChildBdevCreate;
 
 /// io channel, per core
 #[repr(C)]
@@ -95,7 +96,7 @@ impl NexusChannelInner {
     /// we simply put back all the channels, and reopen the bdevs that are in
     /// the online state.
 
-    pub(crate) fn refresh(&mut self) {
+    pub(crate) async fn refresh(&mut self) {
         let nexus = unsafe { Nexus::from_raw(self.device) };
         info!(
             "{}(thread:{:?}), refreshing IO channels",
@@ -118,35 +119,33 @@ impl NexusChannelInner {
         self.previous = 0;
 
         // iterate over all our children which are in the open state
-        nexus
-            .children
-            .iter_mut()
-            .filter(|c| c.state() == ChildState::Open)
-            .for_each(|c| match (c.handle(), c.handle()) {
+        for (_name, child_m) in nexus.children.iter() {
+            let mut child = child_m.lock().await;
+            match (child.handle(), child.handle()) {
                 (Ok(w), Ok(r)) => {
                     self.writers.push(w);
                     self.readers.push(r);
                 }
                 _ => {
-                    c.set_state(ChildState::Faulted(Reason::CantOpen));
-                    error!("failed to create handle for {}", c);
+                    child.set_state(ChildState::Faulted(Reason::CantOpen));
+                    error!("failed to create handle for {}", child);
                 }
-            });
+            }
+        }
 
         // then add write-only children
         if !self.readers.is_empty() {
-            nexus
-                .children
-                .iter_mut()
-                .filter(|c| c.rebuilding())
-                .for_each(|c| {
-                    if let Ok(hdl) = c.handle() {
+            for (_name, child_m) in nexus.children.iter() {
+                let mut child = child_m.lock().await;
+                if child.rebuilding() {
+                    if let Ok(hdl) = child.handle() {
                         self.writers.push(hdl);
                     } else {
-                        c.set_state(ChildState::Faulted(Reason::CantOpen));
-                        error!("failed to create handle for {}", c);
+                        child.set_state(ChildState::Faulted(Reason::CantOpen));
+                        error!("failed to create handle for {}", child);
                     }
-                });
+                }
+            }
         }
 
         trace!(
@@ -178,20 +177,24 @@ impl NexusChannel {
             device,
         });
 
-        nexus
-            .children
-            .iter_mut()
-            .filter(|c| c.state() == ChildState::Open)
-            .for_each(|c| match (c.handle(), c.handle()) {
-                (Ok(w), Ok(r)) => {
-                    channels.writers.push(w);
-                    channels.readers.push(r);
-                }
-                _ => {
-                    c.set_state(ChildState::Faulted(Reason::CantOpen));
-                    error!("Failed to get handle for {}, skipping bdev", c)
+        for (_name, child_m) in nexus.children {
+            futures::executor::block_on(async {
+                let child = child_m.lock().await;
+                if child.state() == ChildState::Open {
+                    match (child.handle(), child.handle()) {
+                        (Ok(w), Ok(r)) => {
+                            channels.writers.push(w);
+                            channels.readers.push(r);
+                        }
+                        _ => {
+                            child.set_state(ChildState::Faulted(Reason::CantOpen));
+                            error!("Failed to get handle for {}, skipping bdev", child)
+                        }
+                    }
                 }
             });
+        }
+
         ch.inner = Box::into_raw(channels);
         0
     }

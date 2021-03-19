@@ -43,29 +43,36 @@ impl Nexus {
     ) -> Result<Receiver<RebuildState>, Error> {
         trace!("{}: start rebuild request for {}", self.name, name);
 
-        let src_child_name = match self
-            .children
-            .iter()
-            .find(|c| c.state() == ChildState::Open && c.name != name)
-        {
-            Some(child) => Ok(child.name.clone()),
-            None => Err(Error::NoRebuildSource {
+        let src_child_name = match self.children.get(name) {
+            Some(src_child) => {
+                let child = src_child.lock().await;
+                if child.state() == ChildState::Open {
+                    Ok(child.name.clone())
+                } else {
+                    Err(Error::NoRebuildSource {
+                        name: self.name.clone(),
+                    })
+                }
+            },
+            _ => Err(Error::NoRebuildSource {
                 name: self.name.clone(),
             }),
         }?;
 
         let dst_child_name =
-            match self.children.iter_mut().find(|c| c.name == name) {
-                Some(c)
-                    if c.state() == ChildState::Faulted(Reason::OutOfSync) =>
-                {
-                    Ok(c.name.clone())
+            match self.children.get(name) {
+                Some(child_m) => {
+                    let child = child_m.lock().await;
+                    if child.state() == ChildState::Faulted(Reason::OutOfSync) {
+                        Ok(child.name.clone())
+                    } else {
+                        Err(Error::ChildNotDegraded {
+                            child: name.to_owned(),
+                            name: self.name.clone(),
+                            state: child.state().to_string(),
+                        })
+                    }
                 }
-                Some(c) => Err(Error::ChildNotDegraded {
-                    child: name.to_owned(),
-                    name: self.name.clone(),
-                    state: c.state().to_string(),
-                }),
                 None => Err(Error::ChildNotFound {
                     child: name.to_owned(),
                     name: self.name.clone(),
@@ -256,16 +263,23 @@ impl Nexus {
         &mut self,
         job: &RebuildJob,
     ) -> Result<(), Error> {
-        let recovering_child = self.get_child_by_name(&job.destination)?;
+        let recovering_child_m = match self.children.get(&job.destination) {
+            Some(child) => child,
+            None => return Err(Error::ChildNotFound {
+                child: job.destination.to_owned(),
+                name: self.name.clone(),
+            }),
+        };
 
         match job.state() {
             RebuildState::Completed => {
+                let recovering_child = recovering_child_m.lock().await;
                 recovering_child.set_state(ChildState::Open);
-                NexusChild::save_state_change();
                 info!(
                     "Child {} has been rebuilt successfully",
                     recovering_child.name
                 );
+                NexusChild::save_state_change();
             }
             RebuildState::Stopped => {
                 info!(
@@ -282,6 +296,7 @@ impl Nexus {
                 {
                     // todo: retry rebuild using another child as source?
                 }
+                let mut recovering_child = recovering_child_m.lock().await;
                 recovering_child.fault(Reason::RebuildFailed).await;
                 error!(
                     "Rebuild job for child {} of nexus {} failed, error: {}",
@@ -291,6 +306,7 @@ impl Nexus {
                 );
             }
             _ => {
+                let mut recovering_child = recovering_child_m.lock().await;
                 recovering_child.fault(Reason::RebuildFailed).await;
                 error!(
                     "Rebuild job for child {} of nexus {} failed with state {:?}",

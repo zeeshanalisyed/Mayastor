@@ -166,9 +166,12 @@ impl Bdev {
         match event {
             spdk_sys::SPDK_BDEV_EVENT_REMOVE => {
                 info!("Received remove event for bdev {}", bdev.name());
-                if let Some(child) = lookup_child_from_bdev(&bdev.name()) {
-                    child.remove();
-                }
+                futures::executor::block_on(async {
+                    let maybe_child = lookup_child_from_bdev(&bdev.name()).await;
+                    if let Some(child) = maybe_child {
+                        child.lock().await.remove();
+                    }
+                });
             }
             spdk_sys::SPDK_BDEV_EVENT_RESIZE => {
                 warn!("Received resize event for bdev {}", bdev.name())

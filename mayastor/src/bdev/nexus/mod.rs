@@ -65,8 +65,8 @@ pub fn nexus_instance_new(name: String, size: u64, children: Vec<String>) {
 pub async fn nexus_children_to_destroying_state() {
     info!("setting all nexus children to destroying state...");
     for nexus in instances() {
-        for child in nexus.children.iter() {
-            child.set_state(nexus_child::ChildState::Destroying);
+        for (_name, child) in nexus.children.iter() {
+            child.lock().await.set_state(nexus_child::ChildState::Destroying);
         }
     }
     info!("set all nexus children to destroying state");
