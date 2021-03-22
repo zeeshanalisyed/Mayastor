@@ -544,7 +544,7 @@ impl Nexus {
         let nexus_name = self.name.clone();
         Reactor::block_on(async move {
             let nexus = nexus_lookup(&nexus_name).expect("Nexus not found");
-            for (_name, child_m) in &mut nexus.children {
+            for child_m in nexus.children.values_mut() {
                 let mut child = child_m.lock().await;
                 if child.state() == ChildState::Open {
                     if let Err(e) = child.close().await {
@@ -591,8 +591,8 @@ impl Nexus {
 
         // wait for all rebuild jobs to be cancelled before proceeding with the
         // destruction of the nexus
-        for (_name, child_m) in self.children.iter() {
-            let mut child = child_m.lock().await;
+        for child_m in self.children.values() {
+            let child = child_m.lock().await;
             self.cancel_child_rebuild_jobs(&child.name).await;
         }
 
@@ -622,7 +622,7 @@ impl Nexus {
 
         if r.await.unwrap() {
             // Update the child states to remove them from the config file.
-            NexusChild::save_state_change();
+            NexusChild::save_state_change().await;
             Ok(())
         } else {
             Err(Error::NexusDestroy {
@@ -720,7 +720,7 @@ impl Nexus {
                 unsafe {
                     spdk_io_device_unregister(self.as_ptr(), None);
                 }
-                for (_name, child_m) in &mut self.children {
+                for child_m in &mut self.children.values() {
                     let mut child = child_m.lock().await;
                     if let Err(e) = child.close().await {
                         error!(
@@ -756,7 +756,7 @@ impl Nexus {
         for (_name, child_m) in self.children.iter() {
             let child = child_m.lock().await;
             if let Some(bdev) = &child.bdev {
-                if bdev.io_type_supported(io_type) == false {
+                if !bdev.io_type_supported(io_type) {
                     return false
                 }
             }

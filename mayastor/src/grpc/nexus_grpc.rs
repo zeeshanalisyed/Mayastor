@@ -67,7 +67,7 @@ impl Nexus {
             device_uri: self.get_share_uri().unwrap_or_default(),
             children: {
                 let mut children = Vec::new();
-                for (_name, child_m) in self.children.iter() {
+                for child_m in self.children.values() {
                     let child = child_m.lock().await;
                     children.push(child.to_grpc())
                 }

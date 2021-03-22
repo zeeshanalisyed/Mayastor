@@ -32,7 +32,7 @@ use crate::{
     bdev::{
         nexus::{
             instances,
-            nexus_child::{ChildState, NexusChild, Reason},
+            nexus_child::{ChildState, Reason},
             nexus_child_status_config::ChildStatusConfig,
         },
         nexus_create,

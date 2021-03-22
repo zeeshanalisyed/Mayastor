@@ -270,7 +270,7 @@ impl Bio {
     }
 
     #[inline]
-    pub(crate) fn complete(&mut self) {
+    pub(crate) async fn complete(&mut self) {
         let pio_ctx = self.ctx_as_mut_ref();
         if pio_ctx.in_flight == 0 {
             if pio_ctx.status == IoStatus::Failed {
@@ -279,7 +279,7 @@ impl Bio {
                     NexusFnTable::io_submit_or_resubmit(
                         self.io_channel(),
                         &mut self.clone(),
-                    );
+                    ).await;
                 } else {
                     self.fail();
                 }
@@ -291,7 +291,7 @@ impl Bio {
 
     /// assess the IO if we need to mark it failed or ok.
     #[inline]
-    pub(crate) fn assess(&mut self, child_io: &mut Bio, success: bool) {
+    pub(crate) async fn assess(&mut self, child_io: &mut Bio, success: bool) {
         self.ctx_as_mut_ref().dec();
 
         if !success {
@@ -300,7 +300,7 @@ impl Bio {
             if NvmeStatus::from(child_io.clone()).status_code()
                 == GenericStatusCode::InvalidOpcode
             {
-                self.complete();
+                self.complete().await;
                 return;
             }
 
@@ -311,7 +311,7 @@ impl Bio {
             ));
         }
 
-        self.complete();
+        self.complete().await;
     }
 
     async fn child_retire(nexus: String, child: Bdev) {
@@ -319,7 +319,7 @@ impl Bio {
 
         if let Some(nexus) = nexus_lookup(&nexus) {
             if let Some(child_m) = nexus.children.get(&child.name()) {
-                let mut child = child_m.lock().await;
+                let child = child_m.lock().await;
                 let current_state = child.state.compare_and_swap(
                     ChildState::Open,
                     ChildState::Faulted(Reason::IoError),

@@ -284,7 +284,7 @@ impl NexusChild {
                 self.set_state(ChildState::Faulted(reason));
             }
         }
-        NexusChild::save_state_change();
+        NexusChild::save_state_change().await;
     }
 
     /// Set the child as temporarily offline
@@ -297,7 +297,7 @@ impl NexusChild {
                 e.verbose()
             );
         }
-        NexusChild::save_state_change();
+        NexusChild::save_state_change().await;
     }
 
     /// Online a previously offlined child.
@@ -323,7 +323,7 @@ impl NexusChild {
 
         let result = self.open(parent_size);
         self.set_state(ChildState::Faulted(Reason::OutOfSync));
-        NexusChild::save_state_change();
+        NexusChild::save_state_change().await;
         result
     }
 

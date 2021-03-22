@@ -23,7 +23,6 @@
 //! When reconfiguring the nexus, we traverse all our children, create new IO
 //! channels for all children that are in the open state.
 
-use futures::future::join_all;
 use snafu::ResultExt;
 
 use crate::{
@@ -241,7 +240,7 @@ impl Nexus {
         self.child_count -= 1;
 
         // Update child status to remove this child
-        NexusChild::save_state_change();
+        NexusChild::save_state_change().await;
 
         self.start_rebuild_jobs(cancelled_rebuilding_children).await;
         Ok(())
@@ -315,7 +314,7 @@ impl Nexus {
                     ChildState::Faulted(_) => {}
                     _ => {
                         child.fault(reason).await;
-                        NexusChild::save_state_change();
+                        NexusChild::save_state_change().await;
                         self.reconfigure(DrEvent::ChildFault).await;
                     }
                 }
@@ -389,7 +388,7 @@ impl Nexus {
     pub(crate) async fn try_open_children(&mut self) -> Result<(), Error> {
         // Set the common block size.
         let mut blk_size = None;
-        for (_key, child_m) in &self.children {
+        for child_m in self.children.values() {
             let child = child_m.lock().await;
             if child.bdev.is_none() {
                 return Err(Error::NexusIncomplete {
@@ -411,7 +410,7 @@ impl Nexus {
         let size = self.size;
 
         let (mut open, mut error) = (Vec::new(), Vec::new());
-        for (_key, child_m) in &self.children {
+        for child_m in self.children.values() {
             let mut child = child_m.lock().await;
             match child.open(size) {
                 Ok(c) => open.push(c),
@@ -446,7 +445,7 @@ impl Nexus {
             });
         }
 
-        for (_key, child_m) in &self.children {
+        for child_m in self.children.values() {
             let child = child_m.lock().await;
             let alignment = child.bdev.as_ref().unwrap().alignment();
             if self.bdev.alignment() < alignment {

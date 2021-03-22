@@ -279,7 +279,7 @@ impl Nexus {
                     "Child {} has been rebuilt successfully",
                     recovering_child.name
                 );
-                NexusChild::save_state_change();
+                NexusChild::save_state_change().await;
             }
             RebuildState::Stopped => {
                 info!(

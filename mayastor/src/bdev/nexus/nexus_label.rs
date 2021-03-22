@@ -1324,7 +1324,7 @@ impl Nexus {
         guid: GptGuid,
     ) -> Result<Option<LabelConfig>, LabelError> {
         for (_key, child_m) in self.children.iter() {
-            let mut child = child_m.lock().await;
+            let child = child_m.lock().await;
             match child.probe_label().await {
                 Ok(label) => {
                     if label.primary.guid != guid {

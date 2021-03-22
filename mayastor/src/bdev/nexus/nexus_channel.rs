@@ -120,7 +120,7 @@ impl NexusChannelInner {
 
         // iterate over all our children which are in the open state
         for (_name, child_m) in nexus.children.iter() {
-            let mut child = child_m.lock().await;
+            let child = child_m.lock().await;
             match (child.handle(), child.handle()) {
                 (Ok(w), Ok(r)) => {
                     self.writers.push(w);
@@ -136,7 +136,7 @@ impl NexusChannelInner {
         // then add write-only children
         if !self.readers.is_empty() {
             for (_name, child_m) in nexus.children.iter() {
-                let mut child = child_m.lock().await;
+                let child = child_m.lock().await;
                 if child.rebuilding() {
                     if let Ok(hdl) = child.handle() {
                         self.writers.push(hdl);
@@ -177,7 +177,7 @@ impl NexusChannel {
             device,
         });
 
-        for (_name, child_m) in &nexus.children {
+        for child_m in nexus.children.values() {
             futures::executor::block_on(async {
                 let child = child_m.lock().await;
                 if child.state() == ChildState::Open {
