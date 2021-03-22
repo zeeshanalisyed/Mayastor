@@ -169,7 +169,7 @@ impl Bdev {
         match event {
             spdk_sys::SPDK_BDEV_EVENT_REMOVE => {
                 info!("Received remove event for bdev {}", bdev.name());
-                futures::executor::block_on(async {
+                crate::core::Reactor::block_on(async move {
                     let maybe_child = lookup_child_from_bdev(&bdev.name()).await;
                     if let Some(child) = maybe_child {
                         child.lock().await.remove();

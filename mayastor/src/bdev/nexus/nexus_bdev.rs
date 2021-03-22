@@ -784,9 +784,10 @@ impl Nexus {
 
             pio.ctx_as_mut_ref().status = IoStatus::Failed;
         }
-        futures::executor::block_on(
-            pio.assess(&mut chio, success)
-        );
+        let chio = crate::core::Reactor::block_on(async move {
+            pio.assess(&mut chio, success).await;
+            chio
+        }).unwrap();
         // always free the child IO
         chio.free();
     }

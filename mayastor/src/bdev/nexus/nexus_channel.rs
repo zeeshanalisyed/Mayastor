@@ -176,8 +176,8 @@ impl NexusChannel {
             device,
         });
 
-        for child_m in nexus.children.values() {
-            futures::executor::block_on(async {
+        let channels = crate::core::Reactor::block_on(async move {
+            for child_m in nexus.children.values() {
                 let child = child_m.lock().await;
                 if child.state() == ChildState::Open {
                     match (child.handle(), child.handle()) {
@@ -191,8 +191,9 @@ impl NexusChannel {
                         }
                     }
                 }
-            });
-        }
+            }
+            channels
+        }).unwrap();
 
         ch.inner = Box::into_raw(channels);
         0
@@ -255,7 +256,7 @@ impl NexusChannel {
     pub extern "C" fn refresh_io_channels(ch_iter: *mut spdk_io_channel_iter) {
         let channel = unsafe { spdk_io_channel_iter_get_channel(ch_iter) };
         let inner = Self::inner_from_channel(channel);
-        futures::executor::block_on(inner.refresh());
+        crate::core::Reactor::block_on(inner.refresh());
         unsafe { spdk_for_each_channel_continue(ch_iter, 0) };
     }
 

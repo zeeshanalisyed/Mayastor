@@ -76,7 +76,7 @@ impl NexusFnTable {
             | IoType::Reset
             | IoType::Unmap
             | IoType::WriteZeros => {
-                let supported = futures::executor::block_on(nexus.io_is_supported(_io_type));
+                let supported = crate::core::Reactor::block_on(nexus.io_is_supported(_io_type)).unwrap_or(false);
                 if !supported {
                     trace!(
                         "IO type {:?} not supported for {}",
@@ -107,7 +107,9 @@ impl NexusFnTable {
         // only set the number of IO attempts before the first attempt
         let mut bio = Bio::from(io);
         bio.init();
-        futures::executor::block_on(Self::io_submit_or_resubmit(channel, &mut bio));
+        crate::core::Reactor::block_on(async move {
+            Self::io_submit_or_resubmit(channel, &mut bio).await;
+        });
     }
 
     /// Submit an IO to the children at the first or subsequent attempts.
@@ -196,14 +198,17 @@ impl NexusFnTable {
             );
         };
 
-        let mut json = Vec::new();
+        let mut json_list = Vec::new();
         for child_m in nexus.children.values() {
-            futures::executor::block_on(async {
+            let child_m = std::sync::Arc::clone(child_m);
+            let json = crate::core::Reactor::block_on(async move {
                 let child = child_m.lock().await;
-                json.push(serde_json::to_string(&*child).unwrap());
-            });
+                serde_json::to_string(&*child).unwrap()
+            }).unwrap();
+            json_list.push(json);
         }
-        let data = CString::new(serde_json::to_string(&json).unwrap()).unwrap();
+
+        let data = CString::new(serde_json::to_string(&json_list).unwrap()).unwrap();
 
         unsafe {
             spdk_json_write_val_raw(
