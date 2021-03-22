@@ -125,6 +125,7 @@ impl NexusModule {
             .iter_mut()
             .filter(|nexus| *nexus.state.lock().unwrap() == NexusState::Init)
             .any(|nexus| {
+                let name = name.clone();
                 Reactor::block_on(async move {
                     if nexus.examine_child(&name).await {
                         info!(

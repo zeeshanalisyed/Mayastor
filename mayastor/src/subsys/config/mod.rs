@@ -271,11 +271,7 @@ impl Config {
                 name: nexus.name.clone(),
                 uuid: nexus.bdev.uuid_as_string(),
                 size: nexus.bdev.size_in_bytes().to_string(),
-                children: nexus
-                    .children
-                    .iter()
-                    .map(|child| child.name.clone())
-                    .collect::<Vec<_>>(),
+                children: nexus.children.keys().cloned().collect::<Vec<_>>(),
             })
             .collect::<Vec<_>>();
 

@@ -65,6 +65,9 @@ pub struct BdevStats {
 #[derive(Clone)]
 pub struct Bdev(NonNull<spdk_bdev>);
 
+unsafe impl Send for Bdev {}
+unsafe impl Sync for Bdev {}
+
 #[async_trait(? Send)]
 impl Share for Bdev {
     type Error = CoreError;

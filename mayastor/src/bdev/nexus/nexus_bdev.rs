@@ -1070,7 +1070,8 @@ impl Nexus {
     /// No child is online so the nexus is faulted
     /// This may be made more configurable in the future
     pub async fn status(&self) -> NexusStatus {
-        match *self.state.lock().unwrap() {
+        let state = *self.state.lock().unwrap();
+        match state {
             NexusState::Init => NexusStatus::Degraded,
             NexusState::Closed => NexusStatus::Faulted,
             NexusState::Open => {
@@ -1083,7 +1084,7 @@ impl Nexus {
                 }
                 if healthy == self.children.len() {
                     NexusStatus::Online
-                } else if healthy >= 0 {
+                } else if healthy > 0 {
                     NexusStatus::Degraded
                 } else {
                     NexusStatus::Faulted

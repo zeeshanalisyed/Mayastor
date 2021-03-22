@@ -177,7 +177,7 @@ impl NexusChannel {
             device,
         });
 
-        for (_name, child_m) in nexus.children {
+        for (_name, child_m) in &nexus.children {
             futures::executor::block_on(async {
                 let child = child_m.lock().await;
                 if child.state() == ChildState::Open {

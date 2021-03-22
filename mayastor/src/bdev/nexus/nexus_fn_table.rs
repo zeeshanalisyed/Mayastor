@@ -197,7 +197,7 @@ impl NexusFnTable {
         };
 
         let mut json = Vec::new();
-        for (_name, child_m) in nexus.children {
+        for (_name, child_m) in &nexus.children {
             futures::executor::block_on(async {
                 let child = child_m.lock().await;
                 json.push(serde_json::to_string(&*child).unwrap());

@@ -30,6 +30,9 @@ use crate::{
 /// allow for the rebuild to happen across multiple cores.
 pub struct Descriptor(*mut spdk_bdev_desc);
 
+unsafe impl Send for Descriptor {}
+unsafe impl Sync for Descriptor {}
+
 impl Descriptor {
     /// returns the underling ptr
     pub fn as_ptr(&self) -> *mut spdk_bdev_desc {
