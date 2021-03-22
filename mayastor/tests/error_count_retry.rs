@@ -57,7 +57,7 @@ async fn nexus_retry_child_write_succeed_test() {
             )
             .await;
 
-            check_nexus_state_is(nexus_name, NexusStatus::Online);
+            check_nexus_state_is(nexus_name, NexusStatus::Online).await;
 
             inject_error(
                 &ee_error_device,
@@ -67,7 +67,7 @@ async fn nexus_retry_child_write_succeed_test() {
             );
 
             err_write_nexus(nexus_name, true).await; //should succeed, 2 attempts vs 1 error
-            check_nexus_state_is(nexus_name, NexusStatus::Degraded);
+            check_nexus_state_is(nexus_name, NexusStatus::Degraded).await;
             delete_nexus(nexus_name).await;
         })
         .await;
@@ -96,7 +96,7 @@ async fn nexus_retry_child_write_fail_test() {
                 &NON_ERROR_BASE_BDEV,
             )
             .await;
-            check_nexus_state_is(nexus_name, NexusStatus::Online);
+            check_nexus_state_is(nexus_name, NexusStatus::Online).await;
 
             inject_error(
                 &ee_error_device,
@@ -106,7 +106,7 @@ async fn nexus_retry_child_write_fail_test() {
             );
 
             err_write_nexus(nexus_name, false).await; //should fail, 2 attempts vs 2 errors
-            check_nexus_state_is(nexus_name, NexusStatus::Degraded);
+            check_nexus_state_is(nexus_name, NexusStatus::Degraded).await;
             delete_nexus(nexus_name).await;
         })
         .await;
@@ -116,9 +116,9 @@ async fn nexus_retry_child_write_fail_test() {
     common::delete_file(&[YAML_CONFIG_FILE.to_string()]);
 }
 
-fn check_nexus_state_is(name: &str, expected_status: NexusStatus) {
+async fn check_nexus_state_is(name: &str, expected_status: NexusStatus) {
     let nexus = nexus_lookup(name).unwrap();
-    assert_eq!(nexus.status(), expected_status);
+    assert_eq!(nexus.status().await, expected_status);
 }
 
 async fn create_nexus(name: &str, err_dev: &str, dev: &str) {

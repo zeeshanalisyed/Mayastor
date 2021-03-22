@@ -240,6 +240,7 @@ async fn nexus_err_query_and_test(
             age_nano,
             QueryType::Total,
         )
+        .await
         .expect("failed to query child");
     assert!(count.is_some()); // true if the error_store is enabled
     assert_eq!(count.unwrap(), expected_count);

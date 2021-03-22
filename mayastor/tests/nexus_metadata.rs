@@ -53,7 +53,8 @@ async fn make_nexus() {
 
 async fn read_write_metadata() {
     let nexus = nexus_lookup("metadata_nexus").unwrap();
-    let child = &mut nexus.children[0];
+    let child_m = nexus.children.values_mut().next().unwrap();
+    let mut child = child_m.lock().await;
 
     let now = SystemTime::now();
     let data = vec![

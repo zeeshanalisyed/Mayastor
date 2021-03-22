@@ -784,7 +784,9 @@ impl Nexus {
 
             pio.ctx_as_mut_ref().status = IoStatus::Failed;
         }
-        pio.assess(&mut chio, success);
+        futures::executor::block_on(
+            pio.assess(&mut chio, success)
+        );
         // always free the child IO
         chio.free();
     }

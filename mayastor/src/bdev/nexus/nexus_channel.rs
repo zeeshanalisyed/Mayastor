@@ -18,7 +18,6 @@ use crate::{
     bdev::{nexus::nexus_child::ChildState, Nexus, Reason},
     core::{BdevHandle, Mthread},
 };
-use crate::bdev::nexus::nexus_child::ChildError::ChildBdevCreate;
 
 /// io channel, per core
 #[repr(C)]
@@ -256,7 +255,7 @@ impl NexusChannel {
     pub extern "C" fn refresh_io_channels(ch_iter: *mut spdk_io_channel_iter) {
         let channel = unsafe { spdk_io_channel_iter_get_channel(ch_iter) };
         let inner = Self::inner_from_channel(channel);
-        inner.refresh();
+        futures::executor::block_on(inner.refresh());
         unsafe { spdk_for_each_channel_continue(ch_iter, 0) };
     }
 

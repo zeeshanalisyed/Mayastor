@@ -107,7 +107,7 @@ impl NexusFnTable {
         // only set the number of IO attempts before the first attempt
         let mut bio = Bio::from(io);
         bio.init();
-        Self::io_submit_or_resubmit(channel, &mut bio);
+        futures::executor::block_on(Self::io_submit_or_resubmit(channel, &mut bio));
     }
 
     /// Submit an IO to the children at the first or subsequent attempts.

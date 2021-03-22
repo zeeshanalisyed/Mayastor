@@ -60,10 +60,11 @@ impl Nexus {
     /// We cannot use From trait because it is not value to value conversion.
     /// All we have is a reference to nexus.
     pub async fn to_grpc(&self) -> rpc::Nexus {
+        let state = self.status().await;
         rpc::Nexus {
             uuid: name_to_uuid(&self.name).to_string(),
             size: self.size,
-            state: rpc::NexusState::from(self.status().await) as i32,
+            state: rpc::NexusState::from(state) as i32,
             device_uri: self.get_share_uri().unwrap_or_default(),
             children: {
                 let mut children = Vec::new();

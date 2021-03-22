@@ -127,7 +127,7 @@ async fn replica_stop_cont() {
                 "child bdev must be destroyed"
             );
             let nx = nexus_lookup(&NXNAME).unwrap();
-            assert_eq!(nx.status(), NexusStatus::Faulted);
+            assert_eq!(nx.status().await, NexusStatus::Faulted);
             assert_eq!(nx.children.len(), 1, "nexus child must still exist");
             nx.unshare_nexus().await.expect("should unpublish nexus");
         })

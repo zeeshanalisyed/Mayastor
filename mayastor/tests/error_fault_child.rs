@@ -50,7 +50,7 @@ async fn nexus_fault_child_test() {
         create_error_bdev(ERROR_DEVICE, DISKNAME2);
         create_nexus().await;
 
-        check_nexus_state_is(NexusStatus::Online);
+        check_nexus_state_is(NexusStatus::Online).await;
 
         inject_error(
             EE_ERROR_DEVICE,
@@ -81,7 +81,7 @@ async fn nexus_fault_child_test() {
 
     // error child should be removed from the IO path here
 
-    ms.spawn(async { check_nexus_state_is(NexusStatus::Degraded) })
+    ms.spawn(async { check_nexus_state_is(NexusStatus::Degraded).await })
         .await;
 
     ms.spawn(async {
@@ -101,9 +101,9 @@ async fn nexus_fault_child_test() {
     common::delete_file(&[YAML_CONFIG_FILE.to_string()]);
 }
 
-fn check_nexus_state_is(expected_status: NexusStatus) {
+async fn check_nexus_state_is(expected_status: NexusStatus) {
     let nexus = nexus_lookup(ERROR_COUNT_TEST_NEXUS).unwrap();
-    assert_eq!(nexus.status(), expected_status);
+    assert_eq!(nexus.status().await, expected_status);
 }
 
 async fn create_nexus() {

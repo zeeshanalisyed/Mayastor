@@ -123,7 +123,8 @@ async fn make_nexus() {
 // compare what is written
 async fn label_child() {
     let nexus = nexus_lookup("gpt_nexus").unwrap();
-    let child = &mut nexus.children[0];
+    let child_m = nexus.children.values_mut().next().unwrap();
+    let child = child_m.lock().await;
     let hdl = child.handle().unwrap();
 
     let mut file = std::fs::File::open("./gpt_primary_test_data.bin").unwrap();

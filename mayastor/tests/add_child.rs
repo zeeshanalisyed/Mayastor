@@ -54,7 +54,7 @@ async fn add_child() {
 
         // Expect the added child to be in the out-of-sync state
         assert_matches!(
-            nexus.children[1].state(),
+            nexus.children.values().nth(1).unwrap().lock().await.state(),
             ChildState::Faulted(Reason::OutOfSync)
         );
     })
@@ -92,7 +92,7 @@ async fn add_child() {
 
         // Expect the added child to be in the out-of-sync state
         assert_matches!(
-            nexus.children[1].state(),
+            nexus.children.values().nth(1).unwrap().lock().await.state(),
             ChildState::Faulted(Reason::OutOfSync)
         );
     })
