@@ -482,7 +482,6 @@ impl Lvs {
             })?;
 
         info!("pool {} destroyed successfully", pool);
-
         bdev_destroy(&base_bdev.bdev_uri().unwrap())
             .await
             .map_err(|e| Error::Destroy {

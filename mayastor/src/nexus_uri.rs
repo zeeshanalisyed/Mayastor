@@ -78,6 +78,7 @@ pub async fn bdev_create(uri: &str) -> Result<String, NexusBdevError> {
 /// Parse URI and destroy bdev described in the URI.
 #[instrument]
 pub async fn bdev_destroy(uri: &str) -> Result<(), NexusBdevError> {
+    error!("DEAD in bdev_destroy");
     Uri::parse(uri)?.destroy().await
 }
 

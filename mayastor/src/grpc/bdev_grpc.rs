@@ -92,6 +92,7 @@ impl BdevRpc for BdevSvc {
     async fn destroy(&self, request: Request<BdevUri>) -> GrpcResult<Null> {
         sync_config(async {
             let uri = request.into_inner().uri;
+            error!("Boot aoot");
             let _bdev = locally! { async move { bdev_destroy(&uri).await } };
 
             Ok(Response::new(Null {}))

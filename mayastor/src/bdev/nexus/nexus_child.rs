@@ -480,6 +480,7 @@ impl NexusChild {
         trace!("destroying child {:?}", self);
         if self.bdev.is_some() {
             self.set_state(ChildState::Destroying);
+            error!("DEAD Boot woot");
             bdev_destroy(&self.name).await
         } else {
             warn!("Destroy child without bdev");
@@ -556,7 +557,9 @@ impl NexusChild {
 pub async fn lookup_child_from_bdev(bdev_name: &str) -> Option<Arc<Mutex<NexusChild>>> {
     for nexus in instances() {
         for (_name, child_m) in nexus.children.iter() {
+            error!("DEAD Locking child");
             let child = child_m.lock().await;
+            error!("DEAD Locked child {}", child.name);
             if child.bdev.is_some()
                 && child.bdev.as_ref().unwrap().name() == bdev_name
             {

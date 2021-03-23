@@ -170,6 +170,7 @@ impl Bdev {
             spdk_sys::SPDK_BDEV_EVENT_REMOVE => {
                 info!("Received remove event for bdev {}", bdev.name());
                 crate::core::Reactor::block_on(async move {
+                    error!("DEAD About to start locking children");
                     let maybe_child = lookup_child_from_bdev(&bdev.name()).await;
                     if let Some(child) = maybe_child {
                         child.lock().await.remove();
