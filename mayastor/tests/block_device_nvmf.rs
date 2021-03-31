@@ -82,7 +82,22 @@ async fn launch_instance() -> (ComposeTest, String) {
         .unwrap();
 
     // get the handles if needed, to invoke methods to the containers
-    let mut hdls = test.grpc_handles().await.unwrap();
+    let mut hdls = {
+        let mut c = 5;
+        loop {
+            let h = test.grpc_handles().await;
+            if h.is_ok() {
+                break h.unwrap();
+            }
+            c -= 1;
+            if c > 0 {
+                println!("... waiting for Mayastor RPC server be available");
+                tokio::time::delay_for(std::time::Duration::from_secs(1)).await;
+            } else {
+                h.unwrap();
+            }
+        }
+    };
 
     // create and share a bdev on each container
     for h in &mut hdls {
