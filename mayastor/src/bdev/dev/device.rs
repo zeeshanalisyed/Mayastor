@@ -568,4 +568,11 @@ impl BlockDeviceHandle for SpdkBlockDeviceHandle {
             opcode: nvme_admin_opc::IDENTIFY.into(),
         })
     }
+
+    // NVMe commands are not applicable for non-NVMe devices.
+    async fn create_snapshot(&self) -> Result<u64, CoreError> {
+        Err(CoreError::NotSupported {
+            source: Errno::ENXIO,
+        })
+    }
 }
