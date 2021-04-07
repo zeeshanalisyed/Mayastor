@@ -260,7 +260,7 @@ impl Lvs {
             )
         }
         .to_result(|e| Error::Create {
-            source: Errno::from_i32(e),
+            source: Errno::from_i32(e.abs()),
             name: name.to_string(),
         })?;
 
@@ -402,7 +402,7 @@ impl Lvs {
         r.await
             .expect("callback gone while exporting lvs")
             .to_result(|e| Error::Export {
-                source: Errno::from_i32(e),
+                source: Errno::from_i32(e.abs()),
                 name: pool.clone(),
             })?;
 
@@ -477,7 +477,7 @@ impl Lvs {
         r.await
             .expect("callback gone while destroying lvs")
             .to_result(|e| Error::Export {
-                source: Errno::from_i32(e),
+                source: Errno::from_i32(e.abs()),
                 name: pool.clone(),
             })?;
 
@@ -550,7 +550,7 @@ impl Lvs {
             )
         }
         .to_result(|e| Error::RepCreate {
-            source: Errno::from_i32(e),
+            source: Errno::from_i32(e.abs()),
             name: name.to_string(),
         })?;
 

@@ -211,7 +211,7 @@ impl Bdev {
 
         if rc != 0 {
             Err(CoreError::OpenBdev {
-                source: Errno::from_i32(rc),
+                source: Errno::from_i32(rc.abs()),
             })
         } else {
             Ok(Descriptor::from_null_checked(descriptor).unwrap())

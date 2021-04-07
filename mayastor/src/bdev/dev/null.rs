@@ -155,7 +155,7 @@ impl CreateDestroy for Null {
 
         if ret != 0 {
             Err(NexusBdevError::CreateBdev {
-                source: Errno::from_i32(ret),
+                source: Errno::from_i32(ret.abs()),
                 name: self.name.clone(),
             })
         } else {

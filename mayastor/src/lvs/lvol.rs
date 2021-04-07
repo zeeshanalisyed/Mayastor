@@ -256,7 +256,7 @@ impl Lvol {
         r.await
             .expect("lvol destroy callback is gone")
             .to_result(|e| Error::RepDestroy {
-                source: Errno::from_i32(e),
+                source: Errno::from_i32(e.abs()),
                 name: self.name(),
             })?;
 
@@ -298,7 +298,7 @@ impl Lvol {
                     )
                 }
                 .to_result(|e| Error::SetProperty {
-                    source: Errno::from_i32(e),
+                    source: Errno::from_i32(e.abs()),
                     prop: prop.into(),
                     name: self.name(),
                 })?;
@@ -312,7 +312,7 @@ impl Lvol {
 
         r.await.expect("sync callback is gone").to_result(|e| {
             Error::SyncProperty {
-                source: Errno::from_i32(e),
+                source: Errno::from_i32(e.abs()),
                 name: self.name(),
             }
         })?;
@@ -341,7 +341,7 @@ impl Lvol {
                     )
                 }
                 .to_result(|e| Error::GetProperty {
-                    source: Errno::from_i32(e),
+                    source: Errno::from_i32(e.abs()),
                     prop,
                     name: self.name(),
                 })?;

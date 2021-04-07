@@ -225,7 +225,7 @@ impl Reactors {
             } else {
                 error!("failed to launch core {}", core);
                 Err(CoreError::ReactorError {
-                    source: Errno::from_i32(rc),
+                    source: Errno::from_i32(rc.abs()),
                 })
             };
         } else {
