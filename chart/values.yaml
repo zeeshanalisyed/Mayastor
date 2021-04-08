@@ -4,7 +4,7 @@ mayastorCpuCount: "1"
 mayastorHugePagesGiB: "1"
 mayastorImagesRegistry: ""
 mayastorPools:
-  - node: "openebs"
+  - node: "openebs1"
     device: "/var/openebs/local"
   # - node: "k8s.worker.8"
   #   device: "/var/openebs/local"
