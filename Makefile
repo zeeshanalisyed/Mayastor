@@ -1,6 +1,6 @@
 # author: zeeshan
 # email: zeeshanelsyed@gmail.com
-ns ?= openebs
+ns ?= openebs-ls
 # helm repo add openebs https://openebs.github.io/charts
 chart ?= openebs
 release ?= openebs-maystor
@@ -45,7 +45,7 @@ removens:
 clean:
 	rm -r $(release).dry-run.yaml 
 install:
-	helm install $(release) --namespace=$(ns) $(lpath) -f $(lpath)/values.yaml --skip-crds --debug | cat > dry-run.yaml
+	helm install $(release) $(lpath) -f $(lpath)/values.yaml --namespace=$(ns) --debug | cat > dry-run.yaml
 rke-yaml:
 	helm template --name-template=$(release) $(lpath) | cat > $(release).yaml 
 uninstall:
