@@ -559,25 +559,11 @@ apiVersion: "openebs.io/v1alpha1"
 kind: MayastorPool
 metadata:
   # Name can be anything as long as it is unique
-  name: pool-on-k8s.worker.8
+  name: pool-on-openebs
   # or let k8s to generate a unique pool name
   #generateName: pool-
   namespace: mongodb-sharded-ns
 spec:
-  node: k8s.worker.8
-  # ATM only one disk device is supported (i.e. /dev/nvme1n1)
-  disks: ["/var/openebs/local"]
----
-# Source: mayastor/templates/pool.yaml
-apiVersion: "openebs.io/v1alpha1"
-kind: MayastorPool
-metadata:
-  # Name can be anything as long as it is unique
-  name: pool-on-k8s.worker.9
-  # or let k8s to generate a unique pool name
-  #generateName: pool-
-  namespace: mongodb-sharded-ns
-spec:
-  node: k8s.worker.9
+  node: openebs
   # ATM only one disk device is supported (i.e. /dev/nvme1n1)
   disks: ["/var/openebs/local"]
