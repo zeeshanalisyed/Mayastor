@@ -1,0 +1,583 @@
+---
+# Source: mayastor/templates/moac-rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: moac
+  namespace: mongodb-sharded-ns
+---
+# Source: mayastor/templates/nats-deployment.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-config
+  namespace: mongodb-sharded-ns
+data:
+  nats.conf: |
+    pid_file: "/var/run/nats/nats.pid"
+
+    http: 8222
+---
+# Source: mayastor/templates/moac-rbac.yaml
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: moac
+rules:
+  # must create mayastor crd if it doesn't exist
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: ["customresourcedefinitions"]
+  verbs: ["create"]
+  # must read csi plugin info
+- apiGroups: ["storage.k8s.io"]
+  resources: ["csinodes"]
+  verbs: ["get", "list", "watch"]
+  # must read/write mayastor node resources
+- apiGroups: ["openebs.io"]
+  resources: ["mayastornodes"]
+  verbs: ["get", "list", "watch", "update", "create", "delete"]
+  # must update mayastor node status
+- apiGroups: ["openebs.io"]
+  resources: ["mayastornodes/status"]
+  verbs: ["update"]
+  # must read mayastor pools info
+- apiGroups: ["openebs.io"]
+  resources: ["mayastorpools"]
+  verbs: ["get", "list", "watch", "update", "replace"]
+  # must update mayastor pools status
+- apiGroups: ["openebs.io"]
+  resources: ["mayastorpools/status"]
+  verbs: ["update"]
+  # must read/write mayastor volume resources
+- apiGroups: ["openebs.io"]
+  resources: ["mayastorvolumes"]
+  verbs: ["get", "list", "watch", "update", "create", "delete"]
+  # must update mayastor volumes status
+- apiGroups: ["openebs.io"]
+  resources: ["mayastorvolumes/status"]
+  verbs: ["update"]
+
+  # external provisioner & attacher
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get", "list", "watch", "update", "create", "delete", "patch"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+
+  # external provisioner
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["list", "watch", "create", "update", "patch"]
+- apiGroups: ["snapshot.storage.k8s.io"]
+  resources: ["volumesnapshots"]
+  verbs: ["get", "list"]
+- apiGroups: ["snapshot.storage.k8s.io"]
+  resources: ["volumesnapshotcontents"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+
+  # external attacher
+- apiGroups: ["storage.k8s.io"]
+  resources: ["volumeattachments"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["volumeattachments/status"]
+  verbs: ["patch"]
+---
+# Source: mayastor/templates/moac-rbac.yaml
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: moac
+subjects:
+- kind: ServiceAccount
+  name: moac
+  namespace: mongodb-sharded-ns
+roleRef:
+  kind: ClusterRole
+  name: moac
+  apiGroup: rbac.authorization.k8s.io
+---
+# Source: mayastor/templates/nats-deployment.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats
+  namespace: mongodb-sharded-ns
+  labels:
+    app: nats
+spec:
+  selector:
+    app: nats
+  clusterIP: None
+  ports:
+  - name: client
+    port: 4222
+  - name: cluster
+    port: 6222
+  - name: monitor
+    port: 8222
+  - name: metrics
+    port: 7777
+---
+# Source: mayastor/templates/csi-daemonset.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  namespace: mongodb-sharded-ns
+  name: mayastor-csi
+  labels:
+    openebs/engine: mayastor
+spec:
+  selector:
+    matchLabels:
+      app: mayastor-csi
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  minReadySeconds: 10
+  template:
+    metadata:
+      labels:
+        app: mayastor-csi
+    spec:
+      hostNetwork: true
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      # NOTE: Each container must have mem/cpu limits defined in order to
+      # belong to Guaranteed QoS class, hence can never get evicted in case of
+      # pressure unless they exceed those limits. limits and requests must be
+      # the same.
+      containers:
+      - name: mayastor-csi
+        image: mayadata/mayastor-csi:latest
+        imagePullPolicy: Always
+        # we need privileged because we mount filesystems and use mknod
+        securityContext:
+          privileged: true
+        env:
+        - name: MY_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: MY_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: RUST_BACKTRACE
+          value: "1"
+        args:
+        - "--csi-socket=/csi/csi.sock"
+        - "--node-name=$(MY_NODE_NAME)"
+        - "--grpc-endpoint=$(MY_POD_IP):10199"
+        - "-v"
+        volumeMounts:
+        - name: device
+          mountPath: /dev
+        - name: sys
+          mountPath: /sys
+        - name: run-udev
+          mountPath: /run/udev
+        - name: host-root
+          mountPath: /host
+        - name: plugin-dir
+          mountPath: /csi
+        - name: kubelet-dir
+          mountPath: /var/lib/kubelet
+          mountPropagation: "Bidirectional"
+        resources:
+          limits:
+            cpu: "100m"
+            memory: "50Mi"
+          requests:
+            cpu: "100m"
+            memory: "50Mi"
+      - name: csi-driver-registrar
+        image: quay.io/k8scsi/csi-node-driver-registrar:v2.1.0
+        args:
+        - "--csi-address=/csi/csi.sock"
+        - "--kubelet-registration-path=/var/lib/kubelet/plugins/mayastor.openebs.io/csi.sock"
+        volumeMounts:
+        - name: plugin-dir
+          mountPath: /csi
+        - name: registration-dir
+          mountPath: /registration
+        resources:
+          limits:
+            cpu: "100m"
+            memory: "50Mi"
+          requests:
+            cpu: "100m"
+            memory: "50Mi"
+        # Mayastor node plugin gRPC server
+        ports:
+        - containerPort: 10199
+          protocol: TCP
+          name: mayastor-node
+      volumes:
+      - name: device
+        hostPath:
+          path: /dev
+          type: Directory
+      - name: sys
+        hostPath:
+          path: /sys
+          type: Directory
+      - name: run-udev
+        hostPath:
+          path: /run/udev
+          type: Directory
+      - name: host-root
+        hostPath:
+          path: /
+          type: Directory
+      - name: registration-dir
+        hostPath:
+          path: /var/lib/kubelet/plugins_registry/
+          type: Directory
+      - name: plugin-dir
+        hostPath:
+          path: /var/lib/kubelet/plugins/mayastor.openebs.io/
+          type: DirectoryOrCreate
+      - name: kubelet-dir
+        hostPath:
+          path: /var/lib/kubelet
+          type: Directory
+---
+# Source: mayastor/templates/mayastor-daemonset.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  namespace: mongodb-sharded-ns
+  name: mayastor
+  labels:
+    openebs/engine: mayastor
+spec:
+  selector:
+    matchLabels:
+      app: mayastor
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  minReadySeconds: 10
+  template:
+    metadata:
+      labels:
+        app: mayastor
+    spec:
+      hostNetwork: true
+      # To resolve services from mayastor's namespace
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        openebs.io/engine: mayastor
+        kubernetes.io/arch: amd64
+      initContainers:
+      - name: message-bus-probe
+        image: busybox:latest
+        command: ['sh', '-c', 'until nc -vz nats 4222; do echo "Waiting for message bus..."; sleep 1; done;']
+      containers:
+      - name: mayastor
+        image: mayadata/mayastor:latest
+        imagePullPolicy: Always
+        env:
+        - name: MY_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: MY_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: IMPORT_NEXUSES
+          value: "false"
+        args:
+        # The -l argument accepts cpu-list. Indexing starts at zero.
+        # For example -l 1,2,10-20 means use core 1, 2, 10 to 20.
+        # Note: Ensure that the CPU resources are updated accordingly.
+        #       If you use 2 CPUs, the CPU: field should also read 2.
+        - "-N$(MY_NODE_NAME)"
+        - "-g$(MY_POD_IP)"
+        - "-nnats"
+        - "-y/var/local/mayastor/config.yaml"
+        - "-l0"
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: device
+          mountPath: /dev
+        - name: udev
+          mountPath: /run/udev
+        - name: dshm
+          mountPath: /dev/shm
+        - name: configlocation
+          mountPath: /var/local/mayastor/
+        - name: config
+          mountPath: /var/local/mayastor/config.yaml
+        resources:
+          # NOTE: Each container must have mem/cpu limits defined in order to
+          # belong to Guaranteed QoS class, hence can never get evicted in case of
+          # pressure unless they exceed those limits. limits and requests must be the same.
+          limits:
+            cpu: "1"
+            memory: "512Mi"
+            hugepages-2Mi: "1Gi"
+          requests:
+            cpu: "1"
+            memory: "512Mi"
+            hugepages-2Mi: "1Gi"
+        ports:
+        - containerPort: 10124
+          protocol: TCP
+          name: mayastor
+      volumes:
+      - name: device
+        hostPath:
+          path: /dev
+          type: Directory
+      - name: udev
+        hostPath:
+          path: /run/udev
+          type: Directory
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: "1Gi"
+      - name: hugepage
+        emptyDir:
+          medium: HugePages
+      - name: configlocation
+        hostPath:
+          path: /var/local/mayastor/
+          type: DirectoryOrCreate
+      - name: config
+        hostPath:
+          path: /var/local/mayastor/config.yaml
+          type: FileOrCreate
+---
+# Source: mayastor/templates/moac-deployment.yaml
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: moac
+  namespace: mongodb-sharded-ns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: moac
+  template:
+    metadata:
+      labels:
+        app: moac
+    spec:
+      serviceAccount: moac
+      containers:
+        - name: csi-provisioner
+          image: quay.io/k8scsi/csi-provisioner:v2.1.1
+          args:
+            - "--v=2"
+            - "--csi-address=$(ADDRESS)"
+            - "--feature-gates=Topology=false"
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          imagePullPolicy: "IfNotPresent"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+
+        - name: csi-attacher
+          image: quay.io/k8scsi/csi-attacher:v3.1.0
+          args:
+            - "--v=2"
+            - "--csi-address=$(ADDRESS)"
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          imagePullPolicy: "IfNotPresent"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+
+        - name: moac
+          image: mayadata/moac:latest
+          imagePullPolicy: Always
+          args:
+            - "--csi-address=$(CSI_ENDPOINT)"
+            - "--namespace=$(MY_POD_NAMESPACE)"
+            - "--port=4000"
+            - "--watcher-idle-timeout=600000"
+            - "--message-bus=nats"
+          env:
+            - name: CSI_ENDPOINT
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+            - name: MY_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+      volumes:
+        - name: socket-dir
+          emptyDir:
+---
+# Source: mayastor/templates/nats-deployment.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats
+  namespace: mongodb-sharded-ns
+  labels:
+    app: nats
+spec:
+  selector:
+    matchLabels:
+      app: nats
+  replicas: 1
+  serviceName: "nats"
+  template:
+    metadata:
+      annotations:
+      labels:
+        app: nats
+    spec:
+      # Common volumes for the containers
+      volumes:
+      - name: config-volume
+        configMap:
+          name: nats-config
+      - name: pid
+        emptyDir: {}
+
+      # Required to be able to HUP signal and apply config reload
+      # to the server without restarting the pod.
+      shareProcessNamespace: true
+
+      #################
+      #               #
+      #  NATS Server  #
+      #               #
+      #################
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: nats
+        image: nats:2.1.7-alpine3.11
+        ports:
+        - containerPort: 4222
+          name: client
+          hostPort: 4222
+        - containerPort: 6222
+          name: cluster
+        - containerPort: 8222
+          name: monitor
+        - containerPort: 7777
+          name: metrics
+        command:
+         - "nats-server"
+         - "--config"
+         - "/etc/nats-config/nats.conf"
+
+        # Required to be able to define an environment variable
+        # that refers to other environment variables.  This env var
+        # is later used as part of the configuration file.
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: CLUSTER_ADVERTISE
+          value: $(POD_NAME).nats.$(POD_NAMESPACE).svc
+        volumeMounts:
+          - name: config-volume
+            mountPath: /etc/nats-config
+          - name: pid
+            mountPath: /var/run/nats
+
+        # Liveness/Readiness probes against the monitoring
+        #
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8222
+          initialDelaySeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8222
+          initialDelaySeconds: 10
+          timeoutSeconds: 5
+
+        # Gracefully stop NATS Server on pod deletion or image upgrade.
+        #
+        lifecycle:
+          preStop:
+            exec:
+              # Using the alpine based NATS image, we add an extra sleep that is
+              # the same amount as the terminationGracePeriodSeconds to allow
+              # the NATS Server to gracefully terminate the client connections.
+              #
+              command: ["/bin/sh", "-c", "/nats-server -sl=ldm=/var/run/nats/nats.pid && /bin/sleep 60"]
+
+      #################################
+      #                               #
+      #  NATS Configuration Reloader  #
+      #                               #
+      #################################
+      - name: reloader
+        image: connecteverything/nats-server-config-reloader:0.6.0
+        command:
+         - "nats-server-config-reloader"
+         - "-pid"
+         - "/var/run/nats/nats.pid"
+         - "-config"
+         - "/etc/nats-config/nats.conf"
+        volumeMounts:
+          - name: config-volume
+            mountPath: /etc/nats-config
+          - name: pid
+            mountPath: /var/run/nats
+---
+# Source: mayastor/templates/pool.yaml
+apiVersion: "openebs.io/v1alpha1"
+kind: MayastorPool
+metadata:
+  # Name can be anything as long as it is unique
+  name: pool-on-k8s.worker.8
+  # or let k8s to generate a unique pool name
+  #generateName: pool-
+  namespace: mongodb-sharded-ns
+spec:
+  node: k8s.worker.8
+  # ATM only one disk device is supported (i.e. /dev/nvme1n1)
+  disks: ["/var/openebs/local"]
+---
+# Source: mayastor/templates/pool.yaml
+apiVersion: "openebs.io/v1alpha1"
+kind: MayastorPool
+metadata:
+  # Name can be anything as long as it is unique
+  name: pool-on-k8s.worker.9
+  # or let k8s to generate a unique pool name
+  #generateName: pool-
+  namespace: mongodb-sharded-ns
+spec:
+  node: k8s.worker.9
+  # ATM only one disk device is supported (i.e. /dev/nvme1n1)
+  disks: ["/var/openebs/local"]
