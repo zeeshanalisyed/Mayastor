@@ -1,18 +1,29 @@
 mayastorImagesTag: latest
-mayastorImagePullPolicy: Always
+mayastorImagePullPolicy: IfNotPresent
 mayastorCpuCount: "1"
 mayastorHugePagesGiB: "1"
 mayastorImagesRegistry: ""
 mayastorPools:
-  - node: "openebs1"
-    device: "/var/openebs/local"
-  # - node: "k8s.worker.8"
+  # - node: "openebs1"
   #   device: "/var/openebs/local"
-  # - node: "k8s.worker.9"
-  #   device: "/var/openebs/local"  
+  - node: "k8s.worker.8"
+    device: "/dev/sdb"
+  - node: "k8s.worker.9"
+    device: "/dev/sdb"  
+storageClasses:
+  - name: mayastor-iscsi
+    replicas: '1'
+    protocol: 'iscsi'
+    provisioner: io.openebs.csi-mayastor 
+  - name: mayastor-nvmf
+    replicas: '3'
+    protocol: 'nvmf'
+    provisioner: io.openebs.csi-mayastor  
 # This option is intended for development yamls and motivated by the problem of
 # moac that does not update status of msp resource in some cases. Feel free to
 # remove when no longer needed.
+testpod:
+  name: fio-1
 moacDebug: false
 
 nats:
@@ -21,5 +32,5 @@ nats:
   exporter:
     enabled: false
   logging:
-    debug: false
-    trace: false
+    debug: true
+    trace: true
