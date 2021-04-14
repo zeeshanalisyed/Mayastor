@@ -4,12 +4,12 @@ mayastorCpuCount: "1"
 mayastorHugePagesGiB: "1"
 mayastorImagesRegistry: ""
 mayastorPools:
-  # - node: "openebs1"
-  #   device: "/var/openebs/local"
-  - node: "k8s.worker.8"
-    device: "/dev/sdb"
-  - node: "k8s.worker.9"
-    device: "/dev/sdb"  
+  - node: "openebs1"
+    device: "/dev/sda"
+  # - node: "k8s.worker.8"
+  #   device: "/dev/sda"
+  # - node: "k8s.worker.9"
+  #   device: "/dev/sda"  
 storageClasses:
   - name: mayastor-iscsi
     replicas: '1'

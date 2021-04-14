@@ -35,9 +35,7 @@ help:
 	 2) $(green)make $/{target} ns=namespace chart=chartname$(end)\n"
 	
 createns:
-  ifeq ("(NotFound)",$(findstring "`kubectl get ns $(ns)`",(NotFound)))
 	kubectl create ns $(ns)
-  endif
 removens:
   ifneq ("(NotFound)",$(findstring "`kubectl get ns $(ns)`",(NotFound)))
 	kubectl delete ns $(ns)
